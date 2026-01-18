@@ -1,3 +1,20 @@
+.odo/env
+.odo/odo-file-index.json
+*.code-workspace
+
+/tmp
+/old
+/private
+
+.vscode
+.prettierrc*
+Vagrantfile
+.vagrant
+
+/node_modules
+*/node_modules
+.pnp.*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
