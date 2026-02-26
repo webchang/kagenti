@@ -19,8 +19,12 @@ TOOLHIVE_MCP_PLURAL = settings.toolhive_mcp_plural
 
 # Labels - Keys
 KAGENTI_TYPE_LABEL = settings.kagenti_type_label
-KAGENTI_PROTOCOL_LABEL = settings.kagenti_protocol_label
+KAGENTI_PROTOCOL_LABEL = settings.kagenti_protocol_label  # deprecated; use PROTOCOL_LABEL_PREFIX
 KAGENTI_FRAMEWORK_LABEL = settings.kagenti_framework_label
+
+# Multi-protocol label prefix: protocol.kagenti.io/<name>
+# The existence of a label with this prefix implies support for the named protocol.
+PROTOCOL_LABEL_PREFIX = "protocol.kagenti.io/"
 KAGENTI_INJECT_LABEL = "kagenti.io/inject"
 KAGENTI_TRANSPORT_LABEL = "kagenti.io/transport"
 KAGENTI_WORKLOAD_TYPE_LABEL = "kagenti.io/workload-type"

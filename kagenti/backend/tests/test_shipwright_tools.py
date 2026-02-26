@@ -44,7 +44,7 @@ from app.core.constants import (
     SHIPWRIGHT_STRATEGY_SECURE,
     DEFAULT_INTERNAL_REGISTRY,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     RESOURCE_TYPE_TOOL,
 )
@@ -77,7 +77,7 @@ class TestToolBuildManifestGeneration:
         assert manifest["metadata"]["name"] == "weather-tool"
         assert manifest["metadata"]["namespace"] == "team1"
         assert manifest["metadata"]["labels"][KAGENTI_TYPE_LABEL] == RESOURCE_TYPE_TOOL
-        assert manifest["metadata"]["labels"][KAGENTI_PROTOCOL_LABEL] == "streamable_http"
+        assert manifest["metadata"]["labels"][f"{PROTOCOL_LABEL_PREFIX}streamable_http"] == ""
         assert manifest["metadata"]["labels"][KAGENTI_FRAMEWORK_LABEL] == "Python"
 
         # Check source configuration

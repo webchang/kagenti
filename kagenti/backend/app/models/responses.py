@@ -12,7 +12,7 @@ from pydantic import BaseModel
 class ResourceLabels(BaseModel):
     """Labels for agent/tool resources."""
 
-    protocol: Optional[str] = None
+    protocol: Optional[List[str]] = None
     framework: Optional[str] = None
     type: Optional[str] = None
 

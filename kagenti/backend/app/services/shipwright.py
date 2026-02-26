@@ -23,7 +23,7 @@ from app.core.constants import (
     KAGENTI_UI_CREATOR_LABEL,
     KAGENTI_OPERATOR_LABEL_NAME,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     RESOURCE_TYPE_AGENT,
     RESOURCE_TYPE_TOOL,
@@ -162,7 +162,7 @@ def build_shipwright_build_manifest(
                 APP_KUBERNETES_IO_CREATED_BY: KAGENTI_UI_CREATOR_LABEL,
                 APP_KUBERNETES_IO_NAME: KAGENTI_OPERATOR_LABEL_NAME,
                 KAGENTI_TYPE_LABEL: type_value,
-                KAGENTI_PROTOCOL_LABEL: protocol,
+                f"{PROTOCOL_LABEL_PREFIX}{protocol}": "",
                 KAGENTI_FRAMEWORK_LABEL: framework,
             },
             "annotations": {

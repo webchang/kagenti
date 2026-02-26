@@ -41,7 +41,7 @@ from app.core.constants import (
     SHIPWRIGHT_DEFAULT_RETENTION_SUCCEEDED,
     SHIPWRIGHT_DEFAULT_RETENTION_FAILED,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_SPIRE_LABEL,
     KAGENTI_SPIRE_ENABLED_VALUE,
@@ -76,7 +76,7 @@ class TestBuildShipwrightBuildManifest:
         assert manifest["metadata"]["name"] == "test-agent"
         assert manifest["metadata"]["namespace"] == "team1"
         assert manifest["metadata"]["labels"][KAGENTI_TYPE_LABEL] == RESOURCE_TYPE_AGENT
-        assert manifest["metadata"]["labels"][KAGENTI_PROTOCOL_LABEL] == "a2a"
+        assert manifest["metadata"]["labels"][f"{PROTOCOL_LABEL_PREFIX}a2a"] == ""
         assert manifest["metadata"]["labels"][KAGENTI_FRAMEWORK_LABEL] == "LangGraph"
 
         # Check source configuration

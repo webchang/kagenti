@@ -25,6 +25,7 @@ from app.core.constants import (
     TOOLHIVE_MCP_PLURAL,
     KAGENTI_TYPE_LABEL,
     KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_INJECT_LABEL,
     KAGENTI_TRANSPORT_LABEL,
@@ -522,8 +523,22 @@ def _get_workload_type_from_resource(resource: dict) -> str:
 
 def _extract_labels(labels: dict) -> ResourceLabels:
     """Extract kagenti labels from Kubernetes labels."""
+    from app.core.constants import PROTOCOL_LABEL_PREFIX
+
+    # Extract protocols from protocol.kagenti.io/<name> prefix labels.
+    protocols = [
+        k[len(PROTOCOL_LABEL_PREFIX):]
+        for k in labels
+        if k.startswith(PROTOCOL_LABEL_PREFIX) and len(k) > len(PROTOCOL_LABEL_PREFIX)
+    ]
+    # Fall back to deprecated kagenti.io/protocol single-value label.
+    if not protocols:
+        legacy = labels.get("kagenti.io/protocol")
+        if legacy:
+            protocols = [legacy]
+
     return ResourceLabels(
-        protocol=labels.get("kagenti.io/protocol"),
+        protocol=protocols or None,
         framework=labels.get("kagenti.io/framework"),
         type=labels.get("kagenti.io/type"),
     )
@@ -922,7 +937,7 @@ def _build_mcpserver_manifest(request: CreateToolRequest) -> dict:
             "labels": {
                 APP_KUBERNETES_IO_CREATED_BY: KAGENTI_UI_CREATOR_LABEL,
                 KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
-                KAGENTI_PROTOCOL_LABEL: request.protocol,
+                f"{PROTOCOL_LABEL_PREFIX}{request.protocol}": "",
                 KAGENTI_FRAMEWORK_LABEL: request.framework,
             },
         },
@@ -1087,7 +1102,7 @@ def _build_tool_deployment_manifest(
     labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
         APP_KUBERNETES_IO_NAME: name,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         KAGENTI_TRANSPORT_LABEL: VALUE_TRANSPORT_STREAMABLE_HTTP,
         KAGENTI_FRAMEWORK_LABEL: framework,
         KAGENTI_WORKLOAD_TYPE_LABEL: WORKLOAD_TYPE_DEPLOYMENT,
@@ -1099,7 +1114,7 @@ def _build_tool_deployment_manifest(
     pod_labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
         APP_KUBERNETES_IO_NAME: name,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         KAGENTI_TRANSPORT_LABEL: VALUE_TRANSPORT_STREAMABLE_HTTP,
         KAGENTI_FRAMEWORK_LABEL: framework,
     }
@@ -1234,7 +1249,7 @@ def _build_tool_statefulset_manifest(
     labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
         APP_KUBERNETES_IO_NAME: name,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         KAGENTI_TRANSPORT_LABEL: VALUE_TRANSPORT_STREAMABLE_HTTP,
         KAGENTI_FRAMEWORK_LABEL: framework,
         KAGENTI_WORKLOAD_TYPE_LABEL: WORKLOAD_TYPE_STATEFULSET,
@@ -1246,7 +1261,7 @@ def _build_tool_statefulset_manifest(
     pod_labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
         APP_KUBERNETES_IO_NAME: name,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         KAGENTI_TRANSPORT_LABEL: VALUE_TRANSPORT_STREAMABLE_HTTP,
         KAGENTI_FRAMEWORK_LABEL: framework,
     }
@@ -1375,7 +1390,7 @@ def _build_tool_service_manifest(
             "namespace": namespace,
             "labels": {
                 KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
-                KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+                f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
                 APP_KUBERNETES_IO_NAME: name,
                 APP_KUBERNETES_IO_MANAGED_BY: KAGENTI_UI_CREATOR_LABEL,
             },
@@ -2184,7 +2199,7 @@ def _build_deployment_from_mcpserver(mcpserver: Dict, namespace: str) -> Dict:
     # Ensure required labels are set
     labels[KAGENTI_TYPE_LABEL] = RESOURCE_TYPE_TOOL
     labels[APP_KUBERNETES_IO_NAME] = name
-    labels[KAGENTI_PROTOCOL_LABEL] = VALUE_PROTOCOL_MCP
+    labels[f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}"] = ""
     labels[KAGENTI_TRANSPORT_LABEL] = VALUE_TRANSPORT_STREAMABLE_HTTP
     labels[KAGENTI_WORKLOAD_TYPE_LABEL] = WORKLOAD_TYPE_DEPLOYMENT
     labels[APP_KUBERNETES_IO_MANAGED_BY] = KAGENTI_UI_CREATOR_LABEL
@@ -2295,7 +2310,7 @@ def _build_deployment_from_mcpserver(mcpserver: Dict, namespace: str) -> Dict:
     pod_labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
         APP_KUBERNETES_IO_NAME: name,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         KAGENTI_TRANSPORT_LABEL: VALUE_TRANSPORT_STREAMABLE_HTTP,
     }
     # Add framework if present
@@ -2362,7 +2377,7 @@ def _build_service_from_mcpserver(mcpserver: Dict, namespace: str) -> Dict:
     # Get labels
     labels = {
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_TOOL,
-        KAGENTI_PROTOCOL_LABEL: VALUE_PROTOCOL_MCP,
+        f"{PROTOCOL_LABEL_PREFIX}{VALUE_PROTOCOL_MCP}": "",
         APP_KUBERNETES_IO_NAME: name,
         APP_KUBERNETES_IO_MANAGED_BY: KAGENTI_UI_CREATOR_LABEL,
     }
