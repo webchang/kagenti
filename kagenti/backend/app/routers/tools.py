@@ -24,7 +24,6 @@ from app.core.constants import (
     TOOLHIVE_CRD_VERSION,
     TOOLHIVE_MCP_PLURAL,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
     PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_INJECT_LABEL,
@@ -73,7 +72,6 @@ from app.models.shipwright import (
     ShipwrightBuildConfig,
     BuildSourceConfig,
     BuildOutputConfig,
-    BuildStatusCondition,
     ResourceConfigFromBuild,
 )
 from app.services.kubernetes import KubernetesService, get_kubernetes_service
@@ -523,8 +521,6 @@ def _get_workload_type_from_resource(resource: dict) -> str:
 
 def _extract_labels(labels: dict) -> ResourceLabels:
     """Extract kagenti labels from Kubernetes labels."""
-    from app.core.constants import PROTOCOL_LABEL_PREFIX
-
     # Extract protocols from protocol.kagenti.io/<name> prefix labels.
     protocols = [
         k[len(PROTOCOL_LABEL_PREFIX):]

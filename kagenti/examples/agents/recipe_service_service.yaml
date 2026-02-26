@@ -7,7 +7,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: agent
-    kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
     app.kubernetes.io/name: recipe-agent
     app.kubernetes.io/managed-by: kagenti-e2e
 spec:

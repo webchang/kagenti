@@ -126,7 +126,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: agent
-    kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
     kagenti.io/framework: LangGraph
     app.kubernetes.io/name: weather-service
     app.kubernetes.io/managed-by: kagenti-ui
@@ -140,7 +140,7 @@ spec:
     metadata:
       labels:
         kagenti.io/type: agent
-        kagenti.io/protocol: a2a
+        protocol.kagenti.io/a2a: ""
         app.kubernetes.io/name: weather-service
     spec:
       containers:
@@ -188,7 +188,7 @@ metadata:
   name: weather-service
   labels:
     kagenti.io/type: agent
-    kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
 spec:
   source:
     type: Git
@@ -229,7 +229,7 @@ All agent workloads use consistent labels for discovery:
 | Label | Value | Purpose |
 |-------|-------|---------|
 | `kagenti.io/type` | `agent` | Identifies resource as a Kagenti agent |
-| `kagenti.io/protocol` | `a2a` | Protocol type |
+| `protocol.kagenti.io/<name>` | `""` | Protocol support (e.g. `protocol.kagenti.io/a2a`) |
 | `kagenti.io/framework` | `LangGraph`, `CrewAI`, etc. | Agent framework |
 | `app.kubernetes.io/name` | `<agent-name>` | Standard K8s app name |
 | `app.kubernetes.io/managed-by` | `kagenti-ui` | Resource manager |
@@ -316,7 +316,7 @@ metadata:
   name: weather-tool
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: streamable_http
+    protocol.kagenti.io/streamable_http: ""
 spec:
   source:
     type: Git
@@ -340,7 +340,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     kagenti.io/transport: streamable_http
     app.kubernetes.io/name: weather-tool
 spec:
@@ -353,7 +353,7 @@ spec:
     metadata:
       labels:
         kagenti.io/type: tool
-        kagenti.io/protocol: mcp
+        protocol.kagenti.io/mcp: ""
         kagenti.io/transport: streamable_http
         app.kubernetes.io/name: weather-tool
     spec:

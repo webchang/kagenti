@@ -273,7 +273,7 @@ class TestToolBuildRunManifestGeneration:
     def test_tool_buildrun_manifest_with_labels(self):
         """Test tool BuildRun manifest includes labels."""
         labels = {
-            "kagenti.io/protocol": "streamable_http",
+            "protocol.kagenti.io/streamable_http": "",
             "kagenti.io/framework": "Python",
         }
 
@@ -284,7 +284,7 @@ class TestToolBuildRunManifestGeneration:
         )
 
         # Check labels are propagated
-        assert manifest["metadata"]["labels"]["kagenti.io/protocol"] == "streamable_http"
+        assert manifest["metadata"]["labels"]["protocol.kagenti.io/streamable_http"] == ""
         assert manifest["metadata"]["labels"]["kagenti.io/framework"] == "Python"
         assert manifest["metadata"]["labels"]["kagenti.io/build-name"] == "labeled-tool"
 

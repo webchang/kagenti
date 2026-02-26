@@ -164,6 +164,7 @@ class Settings(BaseSettings):
 
     @property
     def kagenti_protocol_label(self) -> str:
+        """Deprecated: use PROTOCOL_LABEL_PREFIX from constants instead."""
         return f"{self.kagenti_label_prefix}protocol"
 
     @property

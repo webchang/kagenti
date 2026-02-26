@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/created-by: streamlit-ui
     app.kubernetes.io/name: kagenti-operator
     kagenti.io/framework: Python
-    kagenti.io/protocol: streamable_http
+    protocol.kagenti.io/streamable_http: ""
     kagenti.io/type: tool
 spec:
   deployer:

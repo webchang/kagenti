@@ -25,7 +25,7 @@ from app.core.constants import (
     CRD_VERSION,
     AGENTS_PLURAL,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_INJECT_LABEL,
     KAGENTI_WORKLOAD_TYPE_LABEL,
@@ -455,8 +455,6 @@ def _format_timestamp(timestamp) -> Optional[str]:
 
 def _extract_labels(labels: dict) -> ResourceLabels:
     """Extract kagenti labels from Kubernetes labels."""
-    from app.core.constants import PROTOCOL_LABEL_PREFIX
-
     # Extract protocols from protocol.kagenti.io/<name> prefix labels.
     protocols = [
         k[len(PROTOCOL_LABEL_PREFIX):]
@@ -1897,8 +1895,6 @@ def _build_common_labels(
     Returns:
         Dictionary of labels.
     """
-    from app.core.constants import PROTOCOL_LABEL_PREFIX
-
     labels = {
         # Required labels
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_AGENT,

@@ -419,7 +419,7 @@ class TestBuildShipwrightBuildRunManifest:
         """Test BuildRun manifest with additional labels passed through."""
         additional_labels = {
             "kagenti.io/type": "agent",
-            "kagenti.io/protocol": "a2a",
+            "protocol.kagenti.io/a2a": "",
             "custom-label": "custom-value",
         }
 
@@ -431,7 +431,7 @@ class TestBuildShipwrightBuildRunManifest:
 
         # Check that additional labels are merged
         assert manifest["metadata"]["labels"]["kagenti.io/type"] == "agent"
-        assert manifest["metadata"]["labels"]["kagenti.io/protocol"] == "a2a"
+        assert manifest["metadata"]["labels"]["protocol.kagenti.io/a2a"] == ""
         assert manifest["metadata"]["labels"]["custom-label"] == "custom-value"
 
         # Check that base labels are preserved

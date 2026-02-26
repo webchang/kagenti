@@ -147,7 +147,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     kagenti.io/transport: streamable_http
     kagenti.io/built-by: shipwright
     kagenti.io/build-name: ${TOOL_NAME}
@@ -165,7 +165,7 @@ spec:
     metadata:
       labels:
         kagenti.io/type: tool
-        kagenti.io/protocol: mcp
+        protocol.kagenti.io/mcp: ""
         kagenti.io/transport: streamable_http
         app.kubernetes.io/name: ${TOOL_NAME}
     spec:
@@ -212,7 +212,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     app.kubernetes.io/name: ${TOOL_NAME}
 spec:
   type: ClusterIP

@@ -59,7 +59,8 @@ CRD_VERSION = "v1alpha1"
 AGENTS_PLURAL = "agents"
 
 KAGENTI_TYPE_LABEL = "kagenti.io/type"
-KAGENTI_PROTOCOL_LABEL = "kagenti.io/protocol"
+KAGENTI_PROTOCOL_LABEL = "kagenti.io/protocol"  # deprecated; kept for reading old CRDs
+PROTOCOL_LABEL_PREFIX = "protocol.kagenti.io/"
 KAGENTI_FRAMEWORK_LABEL = "kagenti.io/framework"
 KAGENTI_WORKLOAD_TYPE_LABEL = "kagenti.io/workload-type"
 KAGENTI_DESCRIPTION_ANNOTATION = "kagenti.io/description"
