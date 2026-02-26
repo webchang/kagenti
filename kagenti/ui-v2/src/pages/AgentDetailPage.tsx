@@ -337,11 +337,20 @@ export const AgentDetailPage: React.FC = () => {
           <SplitItem isFilled />
           <SplitItem>
             <Flex>
-              <FlexItem>
-                <Label color="blue">
-                  {labels['kagenti.io/protocol']?.toUpperCase() || 'A2A'}
-                </Label>
-              </FlexItem>
+              {(() => {
+                const protocols = Object.keys(labels)
+                  .filter(k => k.startsWith('protocol.kagenti.io/'))
+                  .map(k => k.replace('protocol.kagenti.io/', ''));
+                if (protocols.length === 0 && labels['kagenti.io/protocol']) {
+                  protocols.push(labels['kagenti.io/protocol']);
+                }
+                if (protocols.length === 0) protocols.push('A2A');
+                return protocols.map(p => (
+                  <FlexItem key={`protocol-${p}`}>
+                    <Label color="blue">{p.toUpperCase()}</Label>
+                  </FlexItem>
+                ));
+              })()}
               {labels['kagenti.io/framework'] && (
                 <FlexItem>
                   <Label color="purple">{labels['kagenti.io/framework']}</Label>

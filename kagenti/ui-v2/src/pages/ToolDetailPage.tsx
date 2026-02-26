@@ -347,11 +347,20 @@ export const ToolDetailPage: React.FC = () => {
           <SplitItem isFilled />
           <SplitItem>
             <Flex>
-              <FlexItem>
-                <Label color="blue">
-                  {labels['kagenti.io/protocol']?.toUpperCase() || 'MCP'}
-                </Label>
-              </FlexItem>
+              {(() => {
+                const protocols = Object.keys(labels)
+                  .filter(k => k.startsWith('protocol.kagenti.io/'))
+                  .map(k => k.replace('protocol.kagenti.io/', ''));
+                if (protocols.length === 0 && labels['kagenti.io/protocol']) {
+                  protocols.push(labels['kagenti.io/protocol']);
+                }
+                if (protocols.length === 0) protocols.push('MCP');
+                return protocols.map(p => (
+                  <FlexItem key={`protocol-${p}`}>
+                    <Label color="blue">{p.toUpperCase()}</Label>
+                  </FlexItem>
+                ));
+              })()}
               {tool.workloadType && (
                 <FlexItem>
                   <Label color="grey">

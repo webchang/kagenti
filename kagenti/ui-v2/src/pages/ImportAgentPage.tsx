@@ -909,7 +909,7 @@ export const ImportAgentPage: React.FC = () => {
                 <FormHelperText>
                   <HelperText>
                     <HelperTextItem>
-                      Sets the kagenti.io/protocol label on the deployment. A2A agents expose an agent card for discovery.
+                      Sets the protocol.kagenti.io/&lt;protocol&gt; label on the deployment. A2A agents expose an agent card for discovery.
                     </HelperTextItem>
                   </HelperText>
                 </FormHelperText>

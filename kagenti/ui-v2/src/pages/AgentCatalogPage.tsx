@@ -136,11 +136,13 @@ export const AgentCatalogPage: React.FC = () => {
   const renderLabels = (agent: Agent) => {
     const labels = [];
     if (agent.labels.protocol) {
-      labels.push(
-        <Label key="protocol" color="blue" isCompact>
-          {agent.labels.protocol.toUpperCase()}
-        </Label>
-      );
+      agent.labels.protocol.forEach((p) => {
+        labels.push(
+          <Label key={`protocol-${p}`} color="blue" isCompact>
+            {p.toUpperCase()}
+          </Label>
+        );
+      });
     }
     if (agent.labels.framework) {
       labels.push(
