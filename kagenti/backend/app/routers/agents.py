@@ -457,7 +457,7 @@ def _extract_labels(labels: dict) -> ResourceLabels:
     """Extract kagenti labels from Kubernetes labels."""
     # Extract protocols from protocol.kagenti.io/<name> prefix labels.
     protocols = [
-        k[len(PROTOCOL_LABEL_PREFIX):]
+        k[len(PROTOCOL_LABEL_PREFIX) :]
         for k in labels
         if k.startswith(PROTOCOL_LABEL_PREFIX) and len(k) > len(PROTOCOL_LABEL_PREFIX)
     ]
