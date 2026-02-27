@@ -449,7 +449,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: agent
-    kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
     kagenti.io/framework: OpenAI
     kagenti.io/workload-type: deployment
     app.kubernetes.io/name: <AGENT-NAME>
@@ -468,7 +468,7 @@ spec:
     metadata:
       labels:
         kagenti.io/type: agent
-        kagenti.io/protocol: a2a
+        protocol.kagenti.io/a2a: ""
         kagenti.io/framework: OpenAI
         app.kubernetes.io/name: <AGENT-NAME>
     spec:
@@ -522,7 +522,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: agent
-    kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
     app.kubernetes.io/name: <AGENT-NAME>
     app.kubernetes.io/managed-by: kagenti-e2e
 spec:

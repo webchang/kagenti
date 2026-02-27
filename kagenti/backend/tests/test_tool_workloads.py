@@ -41,7 +41,7 @@ class TestToolDeploymentManifest:
 
         labels = manifest["metadata"]["labels"]
         assert labels.get("kagenti.io/type") == "tool"
-        assert labels.get("kagenti.io/protocol") == "mcp"
+        assert labels.get("protocol.kagenti.io/mcp") == ""
         assert labels.get("app.kubernetes.io/name") == "weather-tool"
         assert labels.get("kagenti.io/workload-type") == "deployment"
 
@@ -176,7 +176,7 @@ class TestToolStatefulSetManifest:
 
         labels = manifest["metadata"]["labels"]
         assert labels.get("kagenti.io/type") == "tool"
-        assert labels.get("kagenti.io/protocol") == "mcp"
+        assert labels.get("protocol.kagenti.io/mcp") == ""
         assert labels.get("app.kubernetes.io/name") == "persistent-tool"
         assert labels.get("kagenti.io/workload-type") == "statefulset"
 
@@ -264,7 +264,7 @@ class TestToolServiceManifest:
 
         labels = manifest["metadata"]["labels"]
         assert labels.get("kagenti.io/type") == "tool"
-        assert labels.get("kagenti.io/protocol") == "mcp"
+        assert labels.get("protocol.kagenti.io/mcp") == ""
         assert labels.get("app.kubernetes.io/name") == "weather-tool"
 
     def test_service_selector_matches_tool(self, base_params):
@@ -415,7 +415,7 @@ def _build_tool_deployment_manifest(
 
     labels = {
         "kagenti.io/type": "tool",
-        "kagenti.io/protocol": protocol,
+        f"protocol.kagenti.io/{protocol}": "",
         "kagenti.io/transport": "streamable_http",
         "kagenti.io/framework": framework,
         "kagenti.io/workload-type": "deployment",
@@ -513,7 +513,7 @@ def _build_tool_statefulset_manifest(
 
     labels = {
         "kagenti.io/type": "tool",
-        "kagenti.io/protocol": protocol,
+        f"protocol.kagenti.io/{protocol}": "",
         "kagenti.io/transport": "streamable_http",
         "kagenti.io/framework": framework,
         "kagenti.io/workload-type": "statefulset",
@@ -613,7 +613,7 @@ def _build_tool_service_manifest(
             "namespace": namespace,
             "labels": {
                 "kagenti.io/type": "tool",
-                "kagenti.io/protocol": "mcp",
+                "protocol.kagenti.io/mcp": "",
                 "app.kubernetes.io/name": name,
                 "app.kubernetes.io/managed-by": "kagenti-ui",
             },

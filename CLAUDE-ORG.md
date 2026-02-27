@@ -394,8 +394,9 @@ Default credentials: `admin` / `admin`
 # Component type
 kagenti.io/type: agent | tool
 
-# Protocol
-kagenti.io/protocol: a2a | mcp | streamable_http | sse
+# Protocol (prefix-based, multiple allowed)
+protocol.kagenti.io/a2a: ""
+protocol.kagenti.io/mcp: ""
 
 # Framework
 kagenti.io/framework: LangGraph | CrewAI | AG2 | Python

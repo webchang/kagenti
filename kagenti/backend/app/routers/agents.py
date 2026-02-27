@@ -25,7 +25,7 @@ from app.core.constants import (
     CRD_VERSION,
     AGENTS_PLURAL,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_INJECT_LABEL,
     KAGENTI_WORKLOAD_TYPE_LABEL,
@@ -455,8 +455,20 @@ def _format_timestamp(timestamp) -> Optional[str]:
 
 def _extract_labels(labels: dict) -> ResourceLabels:
     """Extract kagenti labels from Kubernetes labels."""
+    # Extract protocols from protocol.kagenti.io/<name> prefix labels.
+    protocols = [
+        k[len(PROTOCOL_LABEL_PREFIX) :]
+        for k in labels
+        if k.startswith(PROTOCOL_LABEL_PREFIX) and len(k) > len(PROTOCOL_LABEL_PREFIX)
+    ]
+    # Fall back to deprecated kagenti.io/protocol single-value label.
+    if not protocols:
+        legacy = labels.get("kagenti.io/protocol")
+        if legacy:
+            protocols = [legacy]
+
     return ResourceLabels(
-        protocol=labels.get("kagenti.io/protocol"),
+        protocol=protocols or None,
         framework=labels.get("kagenti.io/framework"),
         type=labels.get("kagenti.io/type"),
     )
@@ -1874,7 +1886,7 @@ def _build_common_labels(
     All agent workloads MUST have these labels:
     - kagenti.io/type: agent
     - app.kubernetes.io/name: <agent-name>
-    - kagenti.io/protocol: <protocol>
+    - protocol.kagenti.io/<protocol>: "" (at least one)
 
     Args:
         request: The agent creation request.
@@ -1887,7 +1899,6 @@ def _build_common_labels(
         # Required labels
         KAGENTI_TYPE_LABEL: RESOURCE_TYPE_AGENT,
         APP_KUBERNETES_IO_NAME: request.name,
-        KAGENTI_PROTOCOL_LABEL: request.protocol,
         # Recommended labels
         KAGENTI_FRAMEWORK_LABEL: request.framework,
         KAGENTI_WORKLOAD_TYPE_LABEL: workload_type,
@@ -1896,6 +1907,9 @@ def _build_common_labels(
         # AuthBridge sidecar injection control
         KAGENTI_INJECT_LABEL: "enabled" if request.authBridgeEnabled else "disabled",
     }
+    # Protocol label(s) using new prefix format
+    if request.protocol:
+        labels[f"{PROTOCOL_LABEL_PREFIX}{request.protocol}"] = ""
     # SPIRE identity label (triggers spiffe-helper sidecar injection by kagenti-webhook)
     if request.spireEnabled:
         labels[KAGENTI_SPIRE_LABEL] = KAGENTI_SPIRE_ENABLED_VALUE

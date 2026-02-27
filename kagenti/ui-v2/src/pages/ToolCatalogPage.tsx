@@ -122,11 +122,13 @@ export const ToolCatalogPage: React.FC = () => {
   const renderLabels = (tool: Tool) => {
     const labels = [];
     if (tool.labels.protocol) {
-      labels.push(
-        <Label key="protocol" color="blue" isCompact>
-          {tool.labels.protocol.toUpperCase()}
-        </Label>
-      );
+      tool.labels.protocol.forEach((p) => {
+        labels.push(
+          <Label key={`protocol-${p}`} color="blue" isCompact>
+            {p.toUpperCase()}
+          </Label>
+        );
+      });
     }
     if (tool.labels.framework) {
       labels.push(

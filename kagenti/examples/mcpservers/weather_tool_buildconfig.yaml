@@ -10,7 +10,7 @@ metadata:
   labels:
     app.kubernetes.io/name: weather-tool
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     kagenti.io/framework: Python
 ---
 apiVersion: build.openshift.io/v1
@@ -21,7 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: weather-tool
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     kagenti.io/framework: Python
 spec:
   source:

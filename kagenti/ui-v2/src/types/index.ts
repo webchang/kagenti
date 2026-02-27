@@ -10,7 +10,7 @@ export type WorkloadType = 'deployment' | 'statefulset' | 'job';
 
 // Agent types
 export interface AgentLabels {
-  protocol?: string;
+  protocol?: string[];
   framework?: string;
   type?: string;
   workloadType?: WorkloadType;
@@ -154,7 +154,7 @@ export type ToolWorkloadType = 'deployment' | 'statefulset';
 
 // Tool types
 export interface ToolLabels {
-  protocol?: string;
+  protocol?: string[];
   framework?: string;
   type?: string;
   transport?: string;

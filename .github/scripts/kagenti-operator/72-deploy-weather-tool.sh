@@ -25,7 +25,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     kagenti.io/transport: streamable_http
     kagenti.io/framework: Python
     app.kubernetes.io/name: weather-tool
@@ -42,7 +42,7 @@ spec:
     metadata:
       labels:
         kagenti.io/type: tool
-        kagenti.io/protocol: mcp
+        protocol.kagenti.io/mcp: ""
         kagenti.io/transport: streamable_http
         kagenti.io/framework: Python
         app.kubernetes.io/name: weather-tool
@@ -116,7 +116,7 @@ metadata:
   namespace: team1
   labels:
     kagenti.io/type: tool
-    kagenti.io/protocol: mcp
+    protocol.kagenti.io/mcp: ""
     app.kubernetes.io/name: weather-tool
     app.kubernetes.io/managed-by: e2e-test
 spec:

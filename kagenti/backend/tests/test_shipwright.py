@@ -41,7 +41,7 @@ from app.core.constants import (
     SHIPWRIGHT_DEFAULT_RETENTION_SUCCEEDED,
     SHIPWRIGHT_DEFAULT_RETENTION_FAILED,
     KAGENTI_TYPE_LABEL,
-    KAGENTI_PROTOCOL_LABEL,
+    PROTOCOL_LABEL_PREFIX,
     KAGENTI_FRAMEWORK_LABEL,
     KAGENTI_SPIRE_LABEL,
     KAGENTI_SPIRE_ENABLED_VALUE,
@@ -76,7 +76,7 @@ class TestBuildShipwrightBuildManifest:
         assert manifest["metadata"]["name"] == "test-agent"
         assert manifest["metadata"]["namespace"] == "team1"
         assert manifest["metadata"]["labels"][KAGENTI_TYPE_LABEL] == RESOURCE_TYPE_AGENT
-        assert manifest["metadata"]["labels"][KAGENTI_PROTOCOL_LABEL] == "a2a"
+        assert manifest["metadata"]["labels"][f"{PROTOCOL_LABEL_PREFIX}a2a"] == ""
         assert manifest["metadata"]["labels"][KAGENTI_FRAMEWORK_LABEL] == "LangGraph"
 
         # Check source configuration
@@ -419,7 +419,7 @@ class TestBuildShipwrightBuildRunManifest:
         """Test BuildRun manifest with additional labels passed through."""
         additional_labels = {
             "kagenti.io/type": "agent",
-            "kagenti.io/protocol": "a2a",
+            "protocol.kagenti.io/a2a": "",
             "custom-label": "custom-value",
         }
 
@@ -431,7 +431,7 @@ class TestBuildShipwrightBuildRunManifest:
 
         # Check that additional labels are merged
         assert manifest["metadata"]["labels"]["kagenti.io/type"] == "agent"
-        assert manifest["metadata"]["labels"]["kagenti.io/protocol"] == "a2a"
+        assert manifest["metadata"]["labels"]["protocol.kagenti.io/a2a"] == ""
         assert manifest["metadata"]["labels"]["custom-label"] == "custom-value"
 
         # Check that base labels are preserved

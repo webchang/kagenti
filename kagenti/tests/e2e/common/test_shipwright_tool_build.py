@@ -195,7 +195,7 @@ class TestToolShipwrightBuildIntegration:
                 "namespace": TEST_NAMESPACE,
                 "labels": {
                     "kagenti.io/type": "tool",
-                    "kagenti.io/protocol": "streamable_http",
+                    "protocol.kagenti.io/streamable_http": "",
                     "kagenti.io/framework": "Python",
                 },
                 "annotations": {
