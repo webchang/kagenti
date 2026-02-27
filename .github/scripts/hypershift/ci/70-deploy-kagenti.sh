@@ -100,8 +100,80 @@ done
 # from the checked-out source. This keeps PR behavior correct even when a
 # comment-triggered workflow definition comes from the default branch.
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    HELPER_SCRIPT="$REPO_ROOT/.github/scripts/common/25-build-oauth-secret-image.sh"
     echo "Rebuilding and restarting ui-oauth-secret job from current checkout..."
-    "$REPO_ROOT/.github/scripts/common/25-build-oauth-secret-image.sh"
+    if [[ -x "$HELPER_SCRIPT" ]]; then
+        "$HELPER_SCRIPT"
+    elif [[ -f "$HELPER_SCRIPT" ]]; then
+        echo "Helper script is not executable, running with bash: $HELPER_SCRIPT"
+        bash "$HELPER_SCRIPT"
+    else
+        echo "WARNING: $HELPER_SCRIPT not found; using inline fallback path."
+        NAMESPACE="kagenti-system"
+        JOB_NAME="kagenti-ui-oauth-secret-job"
+        BUILD_NAME="ui-oauth-secret"
+        INTERNAL_REGISTRY="image-registry.openshift-image-registry.svc:5000"
+
+        echo "Creating ImageStream and BuildConfig for ${BUILD_NAME}..."
+        oc apply -f - <<EOF
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ${BUILD_NAME}
+  namespace: ${NAMESPACE}
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ${BUILD_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ${BUILD_NAME}:latest
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: auth/ui-oauth-secret/Dockerfile
+EOF
+
+        echo "Starting OpenShift binary build from source..."
+        OC_BUILD=$(oc start-build "$BUILD_NAME" -n "$NAMESPACE" \
+            --from-dir="$REPO_ROOT/kagenti/" --follow=false -o name 2>/dev/null || echo "")
+        if [[ -z "$OC_BUILD" ]]; then
+            echo "ERROR: Failed to start ui-oauth-secret build"
+            exit 1
+        fi
+        for _ in {1..120}; do
+            PHASE=$(oc get "$OC_BUILD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+            if [[ "$PHASE" == "Complete" ]]; then
+                echo "OpenShift build completed"
+                break
+            elif [[ "$PHASE" == "Failed" || "$PHASE" == "Error" || "$PHASE" == "Cancelled" ]]; then
+                echo "ERROR: ui-oauth-secret build failed with phase: $PHASE"
+                oc logs "$OC_BUILD" -n "$NAMESPACE" || true
+                exit 1
+            fi
+            sleep 5
+        done
+
+        echo "Restarting oauth-secret job with updated image..."
+        kubectl delete job "$JOB_NAME" -n "$NAMESPACE" --ignore-not-found
+        sleep 2
+        helm upgrade kagenti "$REPO_ROOT/charts/kagenti" -n "$NAMESPACE" \
+            --reuse-values --no-hooks \
+            --set "uiOAuthSecret.image=${INTERNAL_REGISTRY}/${NAMESPACE}/${BUILD_NAME}" \
+            --set "uiOAuthSecret.tag=latest" \
+            --set "uiOAuthSecret.imagePullPolicy=Always"
+
+        kubectl wait --for=condition=complete "job/$JOB_NAME" -n "$NAMESPACE" --timeout=120s
+        kubectl rollout restart deployment/kagenti-ui -n "$NAMESPACE"
+        kubectl rollout status deployment/kagenti-ui -n "$NAMESPACE" --timeout=120s
+    fi
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         {
             echo "### UI OAuth bootstrap"
