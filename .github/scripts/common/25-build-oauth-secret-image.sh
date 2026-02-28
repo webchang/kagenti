@@ -60,6 +60,7 @@ EOF
     fi
     log_info "Build started: $OC_BUILD"
 
+    phase="Unknown"
     for _ in {1..120}; do
         phase=$(oc get "$OC_BUILD" -n "$BUILD_NS" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
         if [ "$phase" = "Complete" ]; then
@@ -72,6 +73,11 @@ EOF
         fi
         sleep 5
     done
+    if [ "$phase" != "Complete" ]; then
+        log_error "Build timed out after 600s (phase: $phase)"
+        oc logs "$OC_BUILD" -n "$BUILD_NS" || true
+        exit 1
+    fi
 
     INTERNAL_REGISTRY="image-registry.openshift-image-registry.svc:5000"
     INTERNAL_IMAGE="${INTERNAL_REGISTRY}/${BUILD_NS}/${BUILD_NAME}:latest"

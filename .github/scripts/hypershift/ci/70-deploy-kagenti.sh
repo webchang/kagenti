@@ -91,6 +91,8 @@ done
 # Use hypershift-full-test.sh with whitelist mode (--include-X flags)
 # This runs: install + agents only
 # Note: CLUSTER_SUFFIX is set by the workflow (e.g., pr594), don't override it
+# Intentionally not using `exec` here because the oauth bootstrap step below
+# must run after deploy completes.
 "$REPO_ROOT/.github/scripts/local-setup/hypershift-full-test.sh" \
     --include-kagenti-install \
     --include-agents \
@@ -148,6 +150,7 @@ EOF
             echo "ERROR: Failed to start ui-oauth-secret build"
             exit 1
         fi
+        PHASE="Unknown"
         for _ in {1..120}; do
             PHASE=$(oc get "$OC_BUILD" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
             if [[ "$PHASE" == "Complete" ]]; then
@@ -160,6 +163,11 @@ EOF
             fi
             sleep 5
         done
+        if [[ "$PHASE" != "Complete" ]]; then
+            echo "ERROR: ui-oauth-secret build timed out after 600s (phase: $PHASE)"
+            oc logs "$OC_BUILD" -n "$NAMESPACE" || true
+            exit 1
+        fi
 
         echo "Restarting oauth-secret job with updated image..."
         kubectl delete job "$JOB_NAME" -n "$NAMESPACE" --ignore-not-found
@@ -168,9 +176,13 @@ EOF
             --reuse-values --no-hooks \
             --set "uiOAuthSecret.image=${INTERNAL_REGISTRY}/${NAMESPACE}/${BUILD_NAME}" \
             --set "uiOAuthSecret.tag=latest" \
-            --set "uiOAuthSecret.imagePullPolicy=Always"
+            --set "uiOAuthSecret.imagePullPolicy=Always" || true
 
-        kubectl wait --for=condition=complete "job/$JOB_NAME" -n "$NAMESPACE" --timeout=120s
+        kubectl wait --for=condition=complete "job/$JOB_NAME" -n "$NAMESPACE" --timeout=120s || {
+            echo "ERROR: OAuth secret job did not complete"
+            kubectl logs "job/$JOB_NAME" -n "$NAMESPACE" || true
+            exit 1
+        }
         kubectl rollout restart deployment/kagenti-ui -n "$NAMESPACE"
         kubectl rollout status deployment/kagenti-ui -n "$NAMESPACE" --timeout=120s
     fi
