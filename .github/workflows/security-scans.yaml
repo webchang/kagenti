@@ -89,7 +89,7 @@ jobs:
 
       - name: Dependency Review
         id: dependency-review
-        uses: actions/dependency-review-action@05fe4576374b728f0c523d6a13d64c25081e0803  # v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4
         with:
           # Stricter security settings (Phase A improvement)
           fail-on-severity: moderate
@@ -401,7 +401,7 @@ jobs:
 
       # Step 1: Show all dependency vulnerabilities (informational)
       - name: Show all dependency vulnerabilities (informational)
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -416,7 +416,7 @@ jobs:
       # The dependency-review job already catches NEW vulnerable dependencies.
       # A blocking full-repo scan runs after merge (security-post-merge.yaml).
       - name: Check for CRITICAL and HIGH dependency vulnerabilities
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -427,7 +427,7 @@ jobs:
           format: 'table'
 
       - name: Run Trivy config scan on production code (IaC)
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
         with:
           scan-type: 'config'
           # Scan only production directories, exclude examples
@@ -442,7 +442,7 @@ jobs:
           format: 'table'
 
       - name: Run Trivy config scan on examples (informational)
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
         with:
           scan-type: 'config'
           scan-ref: 'kagenti/examples'
@@ -470,17 +470,17 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
+        uses: github/codeql-action/init@0d579ffd059c29b07949a3cce3983f0780820c98  # v4
         with:
           languages: python
           # Use security-extended queries for more thorough analysis
           queries: security-extended
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
+        uses: github/codeql-action/autobuild@0d579ffd059c29b07949a3cce3983f0780820c98  # v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
+        uses: github/codeql-action/analyze@0d579ffd059c29b07949a3cce3983f0780820c98  # v4
         with:
           category: "/language:python"
 

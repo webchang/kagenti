@@ -44,6 +44,7 @@ components:
 
 common:
   kubectlImage: "quay.io/kubestellar/kubectl:1.30.14"
+  postgresImage: "quay.io/fedora/postgresql-16"
 
 # ------------------------------------------------------------------
 #  Components Configurations
@@ -98,6 +99,16 @@ istio:
   istiod:
     profile: ambient
     namespace: '{{ .Values.istio.namespace | quote }}'
+  tracing:
+    randomSamplingPercentage: 100
+
+# ------------------------------------------------------------------
+#  OpenTelemetry Configuration
+# ------------------------------------------------------------------
+otel:
+  collector:
+    service: otel-collector.kagenti-system.svc.cluster.local
+    port: 4317
 
 httpGateway:
   name: http

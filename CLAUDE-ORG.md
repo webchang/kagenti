@@ -86,9 +86,8 @@ Manages complex multi-component applications through:
 - **Platform CR**: Orchestration layer managing collections of Components
 
 #### Kagenti Operator (`kagenti-operator/`)
-Legacy operator with:
-- **Agent CR**: Agent deployment and lifecycle
-- **AgentBuild CR**: Build orchestration (deprecated - use Shipwright instead)
+Manages agent lifecycle and discovery:
+- **AgentCard CR**: Agent deployment and lifecycle
 
 **Note**: Container image builds are now handled by Shipwright Build/BuildRun CRDs directly, triggered by the Kagenti UI. The UI creates Deployment + Service resources for both agents and tools after builds complete.
 
@@ -108,8 +107,7 @@ kagenti-operator/
 │       └── samples/              # Example CRs
 ├── kagenti-operator/
 │   ├── api/v1alpha1/
-│   │   ├── agent_types.go
-│   │   └── agentbuild_types.go   # Deprecated - use Shipwright
+│   │   └── agent_types.go
 │   └── internal/controller/
 └── charts/                       # Helm charts for both operators
 ```
@@ -146,32 +144,9 @@ spec:
     name: weather-service
 ```
 
-**CRDs**:
-```yaml
-# Component (platform-operator)
-apiVersion: kagenti.operator.dev/v1alpha1
-kind: Component
-spec:
-  agent: {}     # or tool: {} or infra: {}
-  deployer:
-    kubernetes:
-      imageSpec: {}      # Deploy from image
-      manifest: {}       # Deploy from URL/GitHub manifest
-      podTemplateSpec: {} # Full pod control
-    helm: {}             # Deploy via Helm chart
-
-# Platform (platform-operator)
-apiVersion: kagenti.operator.dev/v1alpha1
-kind: Platform
-spec:
-  globalConfig:
-    namespace: kagenti-system
-    labels: {}
-    annotations: {}
-  infrastructure: []
-  tools: []
-  agents: []
-```
+**Agent Deployment**: Agents are now deployed as standard Kubernetes Deployments + Services
+(the old Component CRD from `kagenti.operator.dev` has been removed).
+See `docs/plans/migrate-agent-crd-to-workloads.md` for details.
 
 **Commands**:
 ```bash
