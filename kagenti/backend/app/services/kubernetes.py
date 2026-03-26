@@ -200,6 +200,66 @@ class KubernetesService:
             raise
 
     # -------------------------------------------------------------------------
+    # ServiceAccount Operations
+    # -------------------------------------------------------------------------
+
+    def ensure_service_account(self, namespace: str, name: str) -> None:
+        """Create a ServiceAccount if it does not already exist.
+
+        This is needed so that the webhook's SPIFFE identity derivation uses
+        the workload name (e.g. ``git-issue-agent``) rather than falling back
+        to the ReplicaSet hash.
+        """
+        try:
+            self.core_api.read_namespaced_service_account(name=name, namespace=namespace)
+            logger.debug(f"ServiceAccount '{name}' already exists in {namespace}")
+        except ApiException as e:
+            if e.status == 404:
+                sa = kubernetes.client.V1ServiceAccount(
+                    metadata=kubernetes.client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels={"kagenti.io/managed-by": "kagenti-ui"},
+                    ),
+                )
+                self.core_api.create_namespaced_service_account(namespace=namespace, body=sa)
+                logger.info(f"Created ServiceAccount '{name}' in {namespace}")
+            else:
+                logger.error(f"Error checking ServiceAccount '{name}' in {namespace}: {e}")
+                raise
+
+    # -------------------------------------------------------------------------
+    # ConfigMap Operations
+    # -------------------------------------------------------------------------
+
+    def ensure_configmap(
+        self, namespace: str, name: str, data: dict, labels: Optional[dict] = None
+    ) -> None:
+        """Create a ConfigMap if it does not already exist.
+
+        This is idempotent — if the ConfigMap already exists it is left unchanged
+        so that user customizations are preserved.
+        """
+        try:
+            self.core_api.read_namespaced_config_map(name=name, namespace=namespace)
+            logger.debug(f"ConfigMap '{name}' already exists in {namespace}")
+        except ApiException as e:
+            if e.status == 404:
+                cm = kubernetes.client.V1ConfigMap(
+                    metadata=kubernetes.client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels=labels or {"kagenti.io/managed-by": "kagenti-api"},
+                    ),
+                    data=data,
+                )
+                self.core_api.create_namespaced_config_map(namespace=namespace, body=cm)
+                logger.info(f"Created ConfigMap '{name}' in {namespace}")
+            else:
+                logger.error(f"Error checking ConfigMap '{name}' in {namespace}: {e}")
+                raise
+
+    # -------------------------------------------------------------------------
     # Deployment Operations
     # -------------------------------------------------------------------------
 

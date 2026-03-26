@@ -297,10 +297,6 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.11'
 
@@ -401,7 +397,7 @@ jobs:
 
       # Step 1: Show all dependency vulnerabilities (informational)
       - name: Show all dependency vulnerabilities (informational)
-        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -416,7 +412,7 @@ jobs:
       # The dependency-review job already catches NEW vulnerable dependencies.
       # A blocking full-repo scan runs after merge (security-post-merge.yaml).
       - name: Check for CRITICAL and HIGH dependency vulnerabilities
-        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -427,7 +423,7 @@ jobs:
           format: 'table'
 
       - name: Run Trivy config scan on production code (IaC)
-        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           scan-type: 'config'
           # Scan only production directories, exclude examples
@@ -442,7 +438,7 @@ jobs:
           format: 'table'
 
       - name: Run Trivy config scan on examples (informational)
-        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478  # v0.34.2
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           scan-type: 'config'
           scan-ref: 'kagenti/examples'
@@ -455,6 +451,26 @@ jobs:
   # ============================================================================
   # Phase D: Advanced Security
   # ============================================================================
+
+  # GitHub Actions Workflow Lint (actionlint)
+  # Catches script injection (${{ github.event.* }} in run: blocks),
+  # invalid workflow syntax, and other workflow issues.
+  # Fails on critical issues (expression injection = critical).
+  actionlint:
+    name: Workflow Lint (actionlint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@0d952c597ef8459f634d7145b0b044a9699e5e43  # v1.71.0
+        with:
+          fail_on_error: true
+          # Only report issues on lines changed in the PR (not pre-existing)
+          filter_mode: diff_context
+          reporter: github-pr-review
 
   # CodeQL - Free for public repositories on GitHub.com
   # License: https://github.com/github/codeql/blob/main/LICENSE

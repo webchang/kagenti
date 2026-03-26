@@ -31,9 +31,10 @@ spec:
         kagenti.io/framework: LangGraph
         app.kubernetes.io/name: weather-service
     spec:
+      serviceAccountName: weather-service
       containers:
       - name: agent
-        image: registry.cr-system.svc.cluster.local:5000/weather-service:v0.0.1
+        image: ghcr.io/kagenti/agent-examples/weather_service:latest
         imagePullPolicy: Always
         env:
         - name: PORT
@@ -60,6 +61,12 @@ spec:
         - containerPort: 8000
           name: http
           protocol: TCP
+        readinessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 12
         resources:
           requests:
             cpu: 100m

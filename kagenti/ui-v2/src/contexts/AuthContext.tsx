@@ -12,7 +12,9 @@ import React, {
 } from 'react';
 import Keycloak from 'keycloak-js';
 
-import { setTokenGetter } from '@/services/api';
+import { setTokenGetter, setTokenForceRefresher } from '@/services/api';
+
+import { keycloakRedirectUri } from './keycloakRedirectUri';
 
 // API base URL for fetching auth config
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -62,6 +64,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Keep keycloak instance in a ref so it persists across renders
   const keycloakRef = useRef<Keycloak | null>(null);
+  const configuredRedirectUriRef = useRef<string | undefined>(undefined);
 
   // Extract user info from Keycloak token
   const extractUserInfo = useCallback(
@@ -157,11 +160,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           });
         };
 
+        configuredRedirectUriRef.current = config.redirect_uri;
+        const redirectUri = keycloakRedirectUri(config.redirect_uri);
+
         console.log('Initializing Keycloak with config:', {
           url: config.keycloak_url,
           realm: config.realm,
           clientId: config.client_id,
-          redirectUri: config.redirect_uri,
+          redirectUri,
           currentUrl: window.location.href,
         });
 
@@ -172,8 +178,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           pkceMethod: 'S256',
           enableLogging: true, // Enable Keycloak adapter logging
           flow: 'standard', // Use standard authorization code flow
-          // Use redirect_uri from config if provided
-          ...(config.redirect_uri && { redirectUri: config.redirect_uri }),
+          redirectUri,
         }).catch((initError) => {
           console.error('Keycloak init rejected with error:', initError);
 
@@ -293,7 +298,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
     console.log('Initiating login redirect...');
     setError(null); // Clear any previous errors
-    keycloakRef.current.login().catch((err) => {
+    keycloakRef.current
+      .login({
+        redirectUri: keycloakRedirectUri(configuredRedirectUriRef.current),
+      })
+      .catch((err) => {
       const errorMsg = `Login failed: ${err.message || err}`;
       console.error(errorMsg, err);
       setError(errorMsg);
@@ -342,10 +351,33 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [isEnabled]);
 
-  // Register token getter with API service
+  // Force-refresh token, bypassing cache (for 401 retry, issue #1009)
+  const forceRefreshToken = useCallback(async (): Promise<string | null> => {
+    if (!isEnabled) return null;
+
+    const keycloak = keycloakRef.current;
+    if (!keycloak || !keycloak.authenticated) return null;
+
+    try {
+      // Pass -1 to force refresh regardless of current token validity
+      await keycloak.updateToken(-1);
+      const freshToken = keycloak.token || null;
+      if (freshToken) {
+        sessionStorage.setItem('kagenti_access_token', freshToken);
+        setToken(freshToken);
+      }
+      return freshToken;
+    } catch {
+      console.error('Force token refresh failed');
+      return null;
+    }
+  }, [isEnabled]);
+
+  // Register token getter and force-refresher with API service
   useEffect(() => {
     setTokenGetter(getToken);
-  }, [getToken]);
+    setTokenForceRefresher(forceRefreshToken);
+  }, [getToken, forceRefreshToken]);
 
   const value = useMemo(
     () => ({

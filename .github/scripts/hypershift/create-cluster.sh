@@ -32,8 +32,12 @@
 #   # Custom instance type and replicas
 #   REPLICAS=3 INSTANCE_TYPE=m5.2xlarge ./.github/scripts/hypershift/create-cluster.sh
 #
-#   # Enable NodePool autoscaling (min 1, max 3 nodes)
-#   AUTOSCALE_MIN=1 AUTOSCALE_MAX=3 ./.github/scripts/hypershift/create-cluster.sh
+#   # NodePool autoscaling is enabled by default (min 2, max 5)
+#   # Override autoscaling limits
+#   AUTOSCALE_MIN=1 AUTOSCALE_MAX=10 ./.github/scripts/hypershift/create-cluster.sh
+#
+#   # Disable autoscaling (fixed replica count)
+#   AUTOSCALE_MIN="" AUTOSCALE_MAX="" ./.github/scripts/hypershift/create-cluster.sh
 #
 
 set -euo pipefail
@@ -105,11 +109,11 @@ REPLICAS="${REPLICAS:-2}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-m5.xlarge}"
 OCP_VERSION="${OCP_VERSION:-4.20.11}"
 
-# NodePool autoscaling (optional)
-# Set AUTOSCALE_MIN and AUTOSCALE_MAX to enable autoscaling
-# When set, the NodePool will be configured with cluster-autoscaler after creation
-AUTOSCALE_MIN="${AUTOSCALE_MIN:-}"
-AUTOSCALE_MAX="${AUTOSCALE_MAX:-}"
+# NodePool autoscaling (enabled by default)
+# Override AUTOSCALE_MIN and AUTOSCALE_MAX to adjust limits, or set to empty to disable
+# When enabled, the NodePool will be configured with cluster-autoscaler after creation
+AUTOSCALE_MIN="${AUTOSCALE_MIN:-2}"
+AUTOSCALE_MAX="${AUTOSCALE_MAX:-5}"
 
 # Validate autoscaling parameters if set
 if [[ -n "$AUTOSCALE_MIN" ]] && ! [[ "$AUTOSCALE_MIN" =~ ^[0-9]+$ ]]; then
@@ -445,6 +449,70 @@ if [ "$NP_HEALTHY" != "true" ]; then
     exit 1
 fi
 
+# ── Apply Auto-Cleanup Labels (Optional) ──────────────────────────────────
+# Apply labels to enable automatic cleanup of stale clusters.
+# Labels are applied AFTER NodePool health check to ensure the HostedCluster CR
+# is fully propagated and stable.
+#
+# Pattern-based TTL assignment:
+#   - PR tests (*-pr-*, *-pr[0-9]*): 3h
+#   - After-merge tests (*-main-*, *-merge-*): 6h
+#   - CI generic (kagenti-hypershift-ci-*): 3h
+#   - Dev clusters (kagenti-hypershift-custom-*, *-team-*): 168h (1 week)
+#   - Unknown patterns: 24h (fallback)
+#
+# Environment variables:
+#   ENABLE_AUTO_CLEANUP=true        - Enable auto-cleanup labels (default: false)
+#   AUTO_CLEANUP_TTL_HOURS=<hours>  - Override pattern-based TTL
+#
+ENABLE_AUTO_CLEANUP="${ENABLE_AUTO_CLEANUP:-false}"
+
+if [ "$ENABLE_AUTO_CLEANUP" = "true" ]; then
+    log_info "Applying auto-cleanup labels..."
+
+    # Pattern-based TTL assignment
+    case "$CLUSTER_NAME" in
+        *-pr-*|*-pr[0-9]*)
+            TTL_HOURS="3"
+            CLUSTER_TYPE="ci-pr"
+            ;;
+        *-main-*|*-merge-*)
+            TTL_HOURS="6"
+            CLUSTER_TYPE="ci-main"
+            ;;
+        kagenti-hypershift-ci-*)
+            TTL_HOURS="3"
+            CLUSTER_TYPE="ci-generic"
+            ;;
+        kagenti-hypershift-custom-*|*-team-*)
+            TTL_HOURS="168"  # 1 week
+            CLUSTER_TYPE="dev"
+            ;;
+        *)
+            TTL_HOURS="24"
+            CLUSTER_TYPE="unknown"
+            ;;
+    esac
+
+    # Allow explicit override via environment variable
+    TTL_HOURS="${AUTO_CLEANUP_TTL_HOURS:-$TTL_HOURS}"
+
+    log_info "  Pattern: $CLUSTER_TYPE | TTL: ${TTL_HOURS}h"
+
+    # Apply labels using management cluster kubeconfig
+    KUBECONFIG="$MGMT_KUBECONFIG" oc label hostedcluster "$CLUSTER_NAME" -n clusters \
+        "kagenti.io/auto-cleanup=enabled" \
+        "kagenti.io/ttl-hours=$TTL_HOURS" \
+        "kagenti.io/cluster-type=$CLUSTER_TYPE" \
+        --overwrite 2>/dev/null || {
+            log_warn "Failed to apply auto-cleanup labels (cluster will not be auto-deleted)"
+        }
+
+    log_success "Auto-cleanup labels applied (cluster will be deleted after ${TTL_HOURS}h)"
+else
+    log_info "Auto-cleanup disabled (set ENABLE_AUTO_CLEANUP=true to enable)"
+fi
+
 # ── Wait for nodes ────────────────────────────────────────────────────────
 log_info "Waiting for at least one node to be ready..."
 for i in {1..90}; do  # 15 minutes (90 x 10s)
@@ -518,6 +586,42 @@ oc get clusterversion
 
 log_success "Cluster $CLUSTER_NAME created and ready"
 
+# ============================================================================
+# 8. Configure NodePool Autoscaling (if requested)
+# ============================================================================
+
+if [[ -n "$AUTOSCALE_MIN" ]] && [[ -n "$AUTOSCALE_MAX" ]]; then
+    log_info "Configuring NodePool autoscaling (min=$AUTOSCALE_MIN, max=$AUTOSCALE_MAX)..."
+
+    # Patch the NodePool to enable autoscaling
+    # Note: replicas must be set to null when autoScaling is enabled (mutually exclusive)
+    KUBECONFIG="$MGMT_KUBECONFIG" oc patch nodepool/"$NP_NAME" -n clusters --type=merge -p '{
+      "spec": {
+        "replicas": null,
+        "autoScaling": {
+          "min": '"$AUTOSCALE_MIN"',
+          "max": '"$AUTOSCALE_MAX"'
+        }
+      }
+    }' || {
+        log_warn "Failed to configure autoscaling - NodePool may not support it yet"
+        log_warn "You can configure it manually later using:"
+        echo "  KUBECONFIG=$MGMT_KUBECONFIG oc patch nodepool/$NP_NAME -n clusters --type=merge -p '{\"spec\":{\"replicas\":null,\"autoScaling\":{\"min\":$AUTOSCALE_MIN,\"max\":$AUTOSCALE_MAX}}}'"
+    }
+
+    # Verify autoscaling was configured
+    AUTOSCALE_STATUS=$(KUBECONFIG="$MGMT_KUBECONFIG" oc get nodepool -n clusters "$NP_NAME" \
+        -o jsonpath='{.spec.autoScaling}' 2>/dev/null || echo "{}")
+
+    if [[ "$AUTOSCALE_STATUS" != "{}" ]] && [[ "$AUTOSCALE_STATUS" != "" ]]; then
+        log_success "NodePool autoscaling configured successfully"
+        echo "  Min nodes: $AUTOSCALE_MIN"
+        echo "  Max nodes: $AUTOSCALE_MAX"
+    else
+        log_warn "Autoscaling may not have been applied - verify manually"
+    fi
+fi
+
 # In CI mode, output for subsequent steps
 if [ "$CI_MODE" = "true" ]; then
     echo "cluster_kubeconfig=$CLUSTER_KUBECONFIG" >> "$GITHUB_OUTPUT"
@@ -546,11 +650,9 @@ oc get nodes
 
 ./.github/scripts/kagenti-operator/30-run-installer.sh --env ocp
 ./.github/scripts/kagenti-operator/41-wait-crds.sh
-./.github/scripts/kagenti-operator/42-apply-pipeline-template.sh
 
 ./.github/scripts/kagenti-operator/71-build-weather-tool.sh
 ./.github/scripts/kagenti-operator/72-deploy-weather-tool.sh
-./.github/scripts/kagenti-operator/73-patch-weather-tool.sh
 ./.github/scripts/kagenti-operator/74-deploy-weather-agent.sh
 
 export AGENT_URL="https://\$(oc get route -n team1 weather-service -o jsonpath='{.spec.host}')"

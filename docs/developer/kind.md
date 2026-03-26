@@ -178,7 +178,7 @@ After deployment, services are available via `.localtest.me` domains:
 |---------|-----|
 | **Kagenti UI** | http://kagenti-ui.localtest.me:8080 |
 | **Keycloak Admin** | http://keycloak.localtest.me:8080/admin |
-| **Phoenix (Traces)** | http://phoenix.localtest.me:8080 |
+| **Phoenix (Traces)** | http://phoenix.localtest.me:8080 _(only when `components.phoenix.enabled: true`)_ |
 | **Kiali** | http://kiali.localtest.me:8080 |
 
 > **Note:** `.localtest.me` is a special domain that resolves to 127.0.0.1
@@ -319,7 +319,7 @@ Each agent namespace receives:
 
 | Resource | Purpose |
 |----------|---------|
-| `environments` ConfigMap | 8 environment presets (ollama, openai, mcp-weather, etc.) |
+| `authbridge-config` ConfigMap | AuthBridge + SPIRE configuration |
 | `github-token-secret` | GitHub credentials |
 | `github-shipwright-secret` | Build authentication |
 | `ghcr-secret` | GHCR registry pull |

@@ -16,18 +16,20 @@
 #
 # OPTIONS:
 #   Include flags (whitelist mode - only run specified phases):
-#     --include-create   Include cluster creation phase
-#     --include-install  Include Kagenti platform installation phase
-#     --include-agents   Include building/deploying test agents phase
-#     --include-test     Include E2E test phase
-#     --include-destroy  Include cluster destruction phase
+#     --include-cluster-create     Include cluster creation phase
+#     --include-kagenti-install    Include Kagenti platform installation phase
+#     --include-agents             Include building/deploying test agents phase
+#     --include-test               Include backend E2E test phase (pytest)
+#     --include-ui-tests           Include UI E2E test phase (Playwright)
+#     --include-cluster-destroy    Include cluster destruction phase
 #
 #   Skip flags (blacklist mode - run all except specified):
-#     --skip-create      Skip cluster creation (reuse existing cluster)
-#     --skip-install     Skip Kagenti platform installation
-#     --skip-agents      Skip building/deploying test agents
-#     --skip-test        Skip running E2E tests
-#     --skip-destroy     Skip cluster destruction (keep cluster after tests)
+#     --skip-cluster-create        Skip cluster creation (reuse existing cluster)
+#     --skip-kagenti-install       Skip Kagenti platform installation
+#     --skip-agents                Skip building/deploying test agents
+#     --skip-test                  Skip running backend E2E tests
+#     --skip-ui-tests              Skip running UI E2E tests
+#     --skip-cluster-destroy       Skip cluster destruction (keep cluster after tests)
 #
 #   Other options:
 #     --clean-kagenti    Uninstall Kagenti before installing (fresh install)
@@ -42,22 +44,22 @@
 #   ./.github/scripts/local-setup/hypershift-full-test.sh
 #
 #   # First dev run - everything except destroy (blacklist mode)
-#   ./.github/scripts/local-setup/hypershift-full-test.sh --skip-destroy
+#   ./.github/scripts/local-setup/hypershift-full-test.sh --skip-cluster-destroy
 #
 #   # CI deploy step - only install + agents (whitelist mode)
-#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-install --include-agents
+#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-kagenti-install --include-agents
 #
 #   # CI test step - only tests (whitelist mode)
 #   ./.github/scripts/local-setup/hypershift-full-test.sh --include-test
 #
 #   # Iterate on existing cluster (blacklist mode)
-#   ./.github/scripts/local-setup/hypershift-full-test.sh --skip-create --skip-destroy
+#   ./.github/scripts/local-setup/hypershift-full-test.sh --skip-cluster-create --skip-cluster-destroy
 #
 #   # Fresh kagenti on existing cluster (whitelist mode)
-#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-install --include-agents --include-test --clean-kagenti
+#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-kagenti-install --include-agents --include-test --clean-kagenti
 #
 #   # Final cleanup - only destroy (whitelist mode)
-#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-destroy
+#   ./.github/scripts/local-setup/hypershift-full-test.sh --include-cluster-destroy
 #
 
 set -euo pipefail
@@ -81,7 +83,8 @@ PHASES:
     cluster-create    Create HyperShift cluster (~15 min)
     kagenti-install   Install Kagenti platform via Ansible
     agents            Build and deploy test agents (weather-tool, weather-agent)
-    test              Run E2E tests
+    test              Run backend E2E tests (pytest)
+    ui-tests          Run UI E2E tests (Playwright)
     kagenti-uninstall Uninstall Kagenti (opt-in, off by default)
     cluster-destroy   Destroy HyperShift cluster (~10 min)
 
@@ -90,7 +93,8 @@ OPTIONS:
         --include-cluster-create     Include cluster creation
         --include-kagenti-install    Include Kagenti installation
         --include-agents             Include agent deployment
-        --include-test               Include E2E tests
+        --include-test               Include backend E2E tests (pytest)
+        --include-ui-tests           Include UI E2E tests (Playwright)
         --include-kagenti-uninstall  Include Kagenti uninstall
         --include-cluster-destroy    Include cluster destruction
 
@@ -98,7 +102,8 @@ OPTIONS:
         --skip-cluster-create        Skip cluster creation (use existing)
         --skip-kagenti-install       Skip Kagenti installation
         --skip-agents                Skip agent deployment
-        --skip-test                  Skip E2E tests
+        --skip-test                  Skip backend E2E tests
+        --skip-ui-tests              Skip UI E2E tests
         --skip-kagenti-uninstall     Skip Kagenti uninstall (default)
         --skip-cluster-destroy       Skip cluster destruction (keep cluster)
 
@@ -109,6 +114,8 @@ OPTIONS:
     Other options:
         --clean-kagenti              Uninstall Kagenti before installing
         --env ENV                    Environment for installer (default: ocp)
+        --rhoai-profile <profile>    Set RHOAI profile (minimal|full). Default: from env values.
+        --no-rhoai                   Disable RHOAI installation.
         -h, --help                   Show this help message
 
     Cluster suffix:
@@ -166,11 +173,13 @@ INCLUDE_CREATE=false
 INCLUDE_INSTALL=false
 INCLUDE_AGENTS=false
 INCLUDE_TEST=false
+INCLUDE_UI_TESTS=false
 INCLUDE_DESTROY=false
 SKIP_CREATE=false
 SKIP_INSTALL=false
 SKIP_AGENTS=false
 SKIP_TEST=false
+SKIP_UI_TESTS=false
 SKIP_KAGENTI_UNINSTALL=false
 SKIP_DESTROY=false
 INCLUDE_KAGENTI_UNINSTALL=false
@@ -183,6 +192,8 @@ PYTEST_ARGS=""
 DRY_RUN=true  # Default to dry-run if no phase flags provided
 FULL_RUN=false
 HAS_PHASE_FLAGS=false  # Track if any phase flags were provided
+RHOAI_PROFILE="${RHOAI_PROFILE:-}"
+NO_RHOAI="${NO_RHOAI:-false}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -210,6 +221,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --include-test)
             INCLUDE_TEST=true
+            WHITELIST_MODE=true
+            HAS_PHASE_FLAGS=true
+            shift
+            ;;
+        --include-ui-tests)
+            INCLUDE_UI_TESTS=true
             WHITELIST_MODE=true
             HAS_PHASE_FLAGS=true
             shift
@@ -244,6 +261,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-test)
             SKIP_TEST=true
+            HAS_PHASE_FLAGS=true
+            shift
+            ;;
+        --skip-ui-tests)
+            SKIP_UI_TESTS=true
             HAS_PHASE_FLAGS=true
             shift
             ;;
@@ -284,6 +306,18 @@ while [[ $# -gt 0 ]]; do
             SKIP_DESTROY=false
             shift
             ;;
+        --rhoai-profile)
+            RHOAI_PROFILE="$2"
+            if [[ ! "$RHOAI_PROFILE" =~ ^(minimal|full)$ ]]; then
+                echo "ERROR: --rhoai-profile must be 'minimal' or 'full', got '$RHOAI_PROFILE'" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
+        --no-rhoai)
+            NO_RHOAI=true
+            shift
+            ;;
         *)
             CLUSTER_SUFFIX="$1"
             shift
@@ -304,6 +338,7 @@ if [ "$WHITELIST_MODE" = "true" ]; then
     RUN_INSTALL=$INCLUDE_INSTALL
     RUN_AGENTS=$INCLUDE_AGENTS
     RUN_TEST=$INCLUDE_TEST
+    RUN_UI_TESTS=$INCLUDE_UI_TESTS
     RUN_KAGENTI_UNINSTALL=$INCLUDE_KAGENTI_UNINSTALL
     RUN_DESTROY=$INCLUDE_DESTROY
 else
@@ -313,12 +348,14 @@ else
     RUN_INSTALL=true
     RUN_AGENTS=true
     RUN_TEST=true
+    RUN_UI_TESTS=true
     RUN_KAGENTI_UNINSTALL=false
     RUN_DESTROY=true
     [ "$SKIP_CREATE" = "true" ] && RUN_CREATE=false
     [ "$SKIP_INSTALL" = "true" ] && RUN_INSTALL=false
     [ "$SKIP_AGENTS" = "true" ] && RUN_AGENTS=false
     [ "$SKIP_TEST" = "true" ] && RUN_TEST=false
+    [ "$SKIP_UI_TESTS" = "true" ] && RUN_UI_TESTS=false
     [ "$SKIP_KAGENTI_UNINSTALL" = "true" ] && RUN_KAGENTI_UNINSTALL=false
     [ "$SKIP_DESTROY" = "true" ] && RUN_DESTROY=false
 fi
@@ -525,6 +562,7 @@ NEEDS_HOSTED_KUBECONFIG=false
 [ "$RUN_INSTALL" = "true" ] && NEEDS_HOSTED_KUBECONFIG=true
 [ "$RUN_AGENTS" = "true" ] && NEEDS_HOSTED_KUBECONFIG=true
 [ "$RUN_TEST" = "true" ] && NEEDS_HOSTED_KUBECONFIG=true
+[ "$RUN_UI_TESTS" = "true" ] && NEEDS_HOSTED_KUBECONFIG=true
 [ "$RUN_KAGENTI_UNINSTALL" = "true" ] && NEEDS_HOSTED_KUBECONFIG=true
 
 echo "Cluster: $CLUSTER_NAME"
@@ -534,6 +572,7 @@ echo "  cluster-create:     $RUN_CREATE"
 echo "  kagenti-install:    $RUN_INSTALL"
 echo "  agents:             $RUN_AGENTS"
 echo "  test:               $RUN_TEST"
+echo "  ui-tests:           $RUN_UI_TESTS"
 echo "  kagenti-uninstall:  $RUN_KAGENTI_UNINSTALL"
 echo "  cluster-destroy:    $RUN_DESTROY"
 echo ""
@@ -918,13 +957,17 @@ if [ "$RUN_INSTALL" = "true" ]; then
     fi
 
     log_step "Installing Kagenti platform..."
-    ./.github/scripts/kagenti-operator/30-run-installer.sh --env "$KAGENTI_ENV"
+    INSTALLER_ARGS=(--env "$KAGENTI_ENV")
+    if [ "$NO_RHOAI" = "true" ]; then
+        INSTALLER_ARGS+=(--extra-vars '{"rhoai": {"enabled": false}}')
+    elif [ -n "$RHOAI_PROFILE" ]; then
+        INSTALLER_ARGS+=(--extra-vars "{\"rhoai\": {\"enabled\": true, \"profile\": \"$RHOAI_PROFILE\"}}")
+    fi
+    ./.github/scripts/kagenti-operator/30-run-installer.sh "${INSTALLER_ARGS[@]}"
 
     log_step "Waiting for CRDs..."
     ./.github/scripts/kagenti-operator/41-wait-crds.sh
 
-    log_step "Applying pipeline template..."
-    ./.github/scripts/kagenti-operator/42-apply-pipeline-template.sh
 else
     log_phase "PHASE 2: Skipping Kagenti Installation"
 fi
@@ -941,9 +984,6 @@ if [ "$RUN_AGENTS" = "true" ]; then
 
     log_step "Deploying weather-tool..."
     ./.github/scripts/kagenti-operator/72-deploy-weather-tool.sh
-
-    log_step "Patching weather-tool..."
-    ./.github/scripts/kagenti-operator/73-patch-weather-tool.sh
 
     log_step "Deploying weather-agent..."
     ./.github/scripts/kagenti-operator/74-deploy-weather-agent.sh
@@ -989,12 +1029,16 @@ if [ "$RUN_TEST" = "true" ]; then
         KEYCLOAK_HOST=$(oc get route -n keycloak keycloak -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
         if [ -n "$KEYCLOAK_HOST" ]; then
             export KEYCLOAK_URL="https://$KEYCLOAK_HOST"
-            # OpenShift routes use self-signed certs, disable SSL verification
-            export KEYCLOAK_VERIFY_SSL="false"
         else
             log_error "keycloak route not found"
             export KEYCLOAK_URL="http://localhost:8081"
         fi
+    fi
+
+    # OpenShift routes use self-signed certs — always disable SSL verification
+    # for E2E tests, regardless of how KEYCLOAK_URL was set.
+    if [ "$KAGENTI_ENV" = "ocp" ]; then
+        export KEYCLOAK_VERIFY_SSL="false"
     fi
 
     # Set config file based on environment
@@ -1014,20 +1058,35 @@ if [ "$RUN_TEST" = "true" ]; then
         log_step "PYTEST_ARGS: $PYTEST_ARGS"
     fi
 
+    # Print deployed image/Helm versions (collapsible in GH Actions)
+    ./.github/scripts/common/86-print-version-matrix.sh
+
     # Pre-flight checks (OTEL/MLflow pipeline readiness)
     ./.github/scripts/common/90-preflight-checks.sh
 
+    # Ensure test user and service account exist in Keycloak
+    ./.github/scripts/common/87-setup-test-credentials.sh
+
     # Backend E2E tests (pytest)
     ./.github/scripts/kagenti-operator/90-run-e2e-tests.sh
+else
+    log_phase "PHASE 4: Skipping E2E Tests"
+fi
 
-    # UI E2E tests (Playwright)
+# ============================================================================
+# PHASE 4b: Run UI E2E Tests (Playwright)
+# ============================================================================
+
+if [ "$RUN_UI_TESTS" = "true" ]; then
+    log_phase "PHASE 4b: Run UI E2E Tests (Playwright)"
+
     if [ -f "./.github/scripts/common/92-run-ui-tests.sh" ]; then
         ./.github/scripts/common/92-run-ui-tests.sh
     else
         log_step "Skipping UI tests (script not found)"
     fi
 else
-    log_phase "PHASE 4: Skipping E2E Tests"
+    log_phase "PHASE 4b: Skipping UI E2E Tests"
 fi
 
 # ============================================================================

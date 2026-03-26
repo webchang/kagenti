@@ -264,10 +264,26 @@ if [ "$RUN_INSTALL" = "true" ]; then
     log_step "Waiting for CRDs..."
     ./.github/scripts/kagenti-operator/41-wait-crds.sh
 
-    log_step "Applying pipeline template..."
-    ./.github/scripts/kagenti-operator/42-apply-pipeline-template.sh
 else
     log_phase "PHASE 2: Skipping Kagenti Installation"
+fi
+
+# ============================================================================
+# PHASE 2b: Build dependency overrides from source
+# The packaged chart deps may reference :latest images that are incompatible
+# with the old chart binaries. Build from source to match.
+# ============================================================================
+if [ -z "${KAGENTI_DEP_BUILDS:-}" ] || [ "${KAGENTI_DEP_BUILDS:-}" = "[]" ]; then
+    # Default: build webhook from extensions main (proxy-init fix not yet released)
+    # TODO: Remove after bumping kagenti-webhook-chart to >= v0.4.0-alpha.9
+    export KAGENTI_DEP_BUILDS='[{"repo":"kagenti/kagenti-extensions","ref":"main"}]'
+fi
+if [ "${KAGENTI_DEP_BUILDS:-}" != "[]" ] && [ "$RUN_INSTALL" = "true" ]; then
+    DEP_BUILD_SCRIPT="./.github/scripts/common/31-build-deps-from-refs.sh"
+    if [ -f "$DEP_BUILD_SCRIPT" ]; then
+        log_step "Building dependency overrides from source..."
+        bash "$DEP_BUILD_SCRIPT" || log_step "Dependency builds skipped/failed (non-fatal)"
+    fi
 fi
 
 # ============================================================================
@@ -282,9 +298,6 @@ if [ "$RUN_AGENTS" = "true" ]; then
 
     log_step "Deploying weather-tool..."
     ./.github/scripts/kagenti-operator/72-deploy-weather-tool.sh
-
-    log_step "Patching weather-tool..."
-    ./.github/scripts/kagenti-operator/73-patch-weather-tool.sh
 
     log_step "Deploying weather-agent..."
     ./.github/scripts/kagenti-operator/74-deploy-weather-agent.sh
@@ -302,8 +315,14 @@ if [ "$RUN_TEST" = "true" ]; then
     log_step "Installing test dependencies..."
     ./.github/scripts/common/80-install-test-deps.sh
 
+    log_step "Printing version matrix..."
+    ./.github/scripts/common/86-print-version-matrix.sh
+
     log_step "Starting port-forward..."
     ./.github/scripts/common/85-start-port-forward.sh
+
+    log_step "Setting up test credentials..."
+    ./.github/scripts/common/87-setup-test-credentials.sh
 
     # Set config file based on environment
     export KAGENTI_CONFIG_FILE="${KAGENTI_CONFIG_FILE:-deployments/envs/${KAGENTI_ENV}_values.yaml}"

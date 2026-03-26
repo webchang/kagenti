@@ -38,6 +38,14 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report' }],
     ['list'],
   ],
+  /* Per-test timeout: 60s on CI to accommodate Keycloak OAuth redirects */
+  timeout: process.env.CI ? 60000 : 30000,
+
+  /* Assertion timeout: 15s on CI (Keycloak redirect adds latency before elements appear) */
+  expect: {
+    timeout: process.env.CI ? 15000 : 5000,
+  },
+
   /* Shared settings for all the projects below */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
@@ -55,18 +63,36 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
+    /* Auth setup — logs in once and saves storage state for all tests */
+    {
+      name: 'setup',
+      testMatch: /auth\.setup\.ts/,
+    },
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        /* Use authenticated state from setup project */
+        storageState: 'playwright/.auth/user.json',
+      },
+      dependencies: ['setup'],
     },
     // Uncomment to test on additional browsers
     // {
     //   name: 'firefox',
-    //   use: { ...devices['Desktop Firefox'] },
+    //   use: {
+    //     ...devices['Desktop Firefox'],
+    //     storageState: 'playwright/.auth/user.json',
+    //   },
+    //   dependencies: ['setup'],
     // },
     // {
     //   name: 'webkit',
-    //   use: { ...devices['Desktop Safari'] },
+    //   use: {
+    //     ...devices['Desktop Safari'],
+    //     storageState: 'playwright/.auth/user.json',
+    //   },
+    //   dependencies: ['setup'],
     // },
   ],
 

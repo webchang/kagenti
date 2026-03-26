@@ -188,6 +188,7 @@ export interface ToolDetail {
   };
   // Deployment/StatefulSet spec
   spec: {
+    description?: string;
     replicas?: number;
     selector?: {
       matchLabels?: Record<string, string>;
@@ -215,15 +216,6 @@ export interface ToolDetail {
         resources: { requests: { storage: string } };
       };
     }>;
-    // Legacy MCPServer CRD fields
-    description?: string;
-    source?: {
-      git?: {
-        url: string;
-        path: string;
-        branch?: string;
-      };
-    };
   };
   // Status from backend (string for workloads, object for legacy CRD)
   status?: string | DeploymentStatus | {

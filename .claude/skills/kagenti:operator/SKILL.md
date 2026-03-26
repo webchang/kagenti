@@ -12,8 +12,8 @@ Deploy and manage Kagenti operator, agents, and tools on Kubernetes clusters.
 **Deploy/build commands produce large output.** Always redirect to files:
 
 ```bash
-export LOG_DIR=/tmp/kagenti/deploy/$(basename $(git rev-parse --show-toplevel))
-mkdir -p $LOG_DIR
+export LOG_DIR="${LOG_DIR:-${WORKSPACE_DIR:-/tmp}/kagenti-deploy}"
+mkdir -p "$LOG_DIR"
 
 # Pattern: redirect build/deploy output
 command > $LOG_DIR/<name>.log 2>&1; echo "EXIT:$?"
@@ -35,7 +35,6 @@ command > $LOG_DIR/<name>.log 2>&1; echo "EXIT:$?"
 
 # Wait for CRDs and apply pipeline template
 ./.github/scripts/kagenti-operator/41-wait-crds.sh
-./.github/scripts/kagenti-operator/42-apply-pipeline-template.sh
 ```
 
 ## Quick Deploy (OpenShift/HyperShift)
@@ -49,7 +48,6 @@ export KUBECONFIG=~/clusters/hcp/<cluster-name>/auth/kubeconfig
 
 # Wait for CRDs and apply pipeline template
 ./.github/scripts/kagenti-operator/41-wait-crds.sh
-./.github/scripts/kagenti-operator/42-apply-pipeline-template.sh
 ```
 
 ## Deploy Demo Agents
@@ -65,9 +63,6 @@ Full demo deployment workflow:
 
 # 3. Deploy weather tool
 ./.github/scripts/kagenti-operator/72-deploy-weather-tool.sh
-
-# 4. Patch weather tool (HTTPRoute, MCP config)
-./.github/scripts/kagenti-operator/73-patch-weather-tool.sh
 
 # 5. Deploy weather agent
 ./.github/scripts/kagenti-operator/74-deploy-weather-agent.sh
@@ -99,7 +94,6 @@ export KAGENTI_CONFIG_FILE=deployments/envs/ocp_values.yaml  # OpenShift
 |--------|-------------|
 | `30-run-installer.sh` | Run Ansible installer for Kagenti platform |
 | `41-wait-crds.sh` | Wait for Kagenti CRDs to be available |
-| `42-apply-pipeline-template.sh` | Apply Tekton pipeline templates |
 
 ### Namespace Setup
 
@@ -113,7 +107,6 @@ export KAGENTI_CONFIG_FILE=deployments/envs/ocp_values.yaml  # OpenShift
 |--------|-------------|
 | `71-build-weather-tool.sh` | Build weather tool via Tekton pipeline |
 | `72-deploy-weather-tool.sh` | Deploy weather tool Component CR |
-| `73-patch-weather-tool.sh` | Patch weather tool with HTTPRoute/MCP config |
 | `74-deploy-weather-agent.sh` | Deploy weather agent Component CR |
 | `75-deploy-weather-tool-shipwright.sh` | Alternative: deploy with Shipwright |
 

@@ -20,6 +20,7 @@ from kubernetes.client import ApiException
 from pydantic import BaseModel, field_validator
 
 from app.core.auth import ROLE_OPERATOR, ROLE_VIEWER, require_roles
+from app.utils.routes import get_agent_url
 from app.core.constants import (
     CRD_GROUP,
     CRD_VERSION,
@@ -43,6 +44,7 @@ from app.core.constants import (
     DEFAULT_RESOURCE_LIMITS,
     DEFAULT_RESOURCE_REQUESTS,
     DEFAULT_ENV_VARS,
+    AGENT_ENDPOINT,
     # Shipwright constants
     SHIPWRIGHT_CRD_GROUP,
     SHIPWRIGHT_CRD_VERSION,
@@ -61,6 +63,11 @@ from app.core.constants import (
     # SPIRE identity constants
     KAGENTI_SPIRE_LABEL,
     KAGENTI_SPIRE_ENABLED_VALUE,
+    # AuthBridge ConfigMap defaults
+    DEFAULT_KEYCLOAK_INTERNAL_URL,
+    DEFAULT_KEYCLOAK_REALM,
+    DEFAULT_SPIFFE_HELPER_CONF,
+    DEFAULT_ENVOY_YAML,
 )
 from app.core.config import settings
 from app.models.responses import (
@@ -79,6 +86,7 @@ from app.models.shipwright import (
     BuildStatusCondition,
     ClusterBuildStrategyInfo,
     ClusterBuildStrategiesResponse,
+    ShipwrightBuildListResponse,
     ShipwrightBuildStatusResponse,
     ShipwrightBuildRunStatusResponse,
     ResourceConfigFromBuild,
@@ -95,6 +103,7 @@ from app.services.shipwright import (
     get_output_image_from_buildrun,
     resolve_clone_secret,
 )
+from app.services.shipwright_builds import collect_kagenti_shipwright_builds
 
 
 class SecretKeyRef(BaseModel):
@@ -1083,6 +1092,7 @@ async def migrate_agent(
     else:
         # Create new Deployment from Agent CRD spec
         deployment_manifest = _build_deployment_from_agent_crd(agent)
+        kube.ensure_service_account(namespace=namespace, name=name)
         try:
             kube.create_deployment(namespace=namespace, body=deployment_manifest)
             deployment_created = True
@@ -1288,6 +1298,7 @@ def _build_deployment_from_agent_crd(agent: dict) -> dict:
             )
 
         pod_spec = {
+            "serviceAccountName": name,
             "containers": [
                 {
                     "name": "agent",
@@ -1315,6 +1326,10 @@ def _build_deployment_from_agent_crd(agent: dict) -> dict:
                 {"name": "shared-data", "emptyDir": {}},
             ],
         }
+
+    # Ensure serviceAccountName is set so the webhook's SPIFFE identity
+    # derivation uses the workload name rather than the ReplicaSet hash.
+    pod_spec.setdefault("serviceAccountName", name)
 
     # Build selector labels
     selector_labels = {
@@ -1457,6 +1472,45 @@ async def list_build_strategies(
             status_code=e.status,
             detail=f"Failed to list build strategies: {e.reason}",
         )
+
+
+@router.get(
+    "/shipwright-builds",
+    response_model=ShipwrightBuildListResponse,
+    dependencies=[Depends(require_roles(ROLE_VIEWER))],
+)
+async def list_agent_shipwright_builds(
+    namespace: str = Query(
+        default="",
+        description="Kubernetes namespace (required unless all_namespaces=true)",
+    ),
+    all_namespaces: bool = Query(
+        default=False,
+        alias="allNamespaces",
+        description="If true, list builds in all kagenti-enabled namespaces",
+    ),
+    kube: KubernetesService = Depends(get_kubernetes_service),
+) -> ShipwrightBuildListResponse:
+    """List Shipwright Build resources for agents only (kagenti.io/type=agent)."""
+    namespaces_to_scan: List[str] = []
+    if all_namespaces:
+        namespaces_to_scan = kube.list_enabled_namespaces()
+    else:
+        if not namespace or not namespace.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="namespace query parameter is required (or use allNamespaces=true)",
+            )
+        namespaces_to_scan = [namespace.strip()]
+
+    try:
+        items = collect_kagenti_shipwright_builds(
+            kube, namespaces_to_scan, RESOURCE_TYPE_AGENT, logger
+        )
+    except ApiException as e:
+        raise HTTPException(status_code=e.status, detail=str(e.reason))
+
+    return ShipwrightBuildListResponse(items=items)
 
 
 @router.get(
@@ -1762,6 +1816,58 @@ async def get_shipwright_build_info(
         raise HTTPException(status_code=e.status, detail=str(e.reason))
 
 
+def _ensure_authbridge_configmaps(
+    kube: KubernetesService,
+    namespace: str,
+    spire_enabled: bool = False,
+) -> None:
+    """Ensure the 3 ConfigMaps required by AuthBridge sidecars exist.
+
+    Creates each ConfigMap only if it does not already exist, so user
+    customizations (e.g. pointing at a different Keycloak server) are
+    preserved on subsequent agent deploys.
+
+    The ConfigMaps match what the Helm chart creates in
+    charts/kagenti/templates/agent-namespaces.yaml:
+      - authbridge-config: Keycloak URLs for go-processor / client-registration
+      - envoy-config: Envoy proxy listeners and ext-proc integration
+      - spiffe-helper-config: SPIFFE workload API socket paths and SVID output
+    """
+    keycloak_url = settings.keycloak_url or DEFAULT_KEYCLOAK_INTERNAL_URL
+    realm = settings.effective_keycloak_realm or DEFAULT_KEYCLOAK_REALM
+    # ISSUER must use the public/external URL because it must match the
+    # "iss" claim in JWT tokens issued by Keycloak (split-horizon DNS).
+    issuer = f"{settings.effective_keycloak_url}/realms/{realm}"
+
+    # 1. authbridge-config
+    kube.ensure_configmap(
+        namespace=namespace,
+        name="authbridge-config",
+        data={
+            "KEYCLOAK_URL": keycloak_url,
+            "KEYCLOAK_REALM": realm,
+            "ISSUER": issuer,
+            "SPIRE_ENABLED": "true" if spire_enabled else "false",
+        },
+    )
+
+    # 2. envoy-config
+    kube.ensure_configmap(
+        namespace=namespace,
+        name="envoy-config",
+        data={"envoy.yaml": DEFAULT_ENVOY_YAML},
+    )
+
+    # 3. spiffe-helper-config
+    kube.ensure_configmap(
+        namespace=namespace,
+        name="spiffe-helper-config",
+        data={"helper.conf": DEFAULT_SPIFFE_HELPER_CONF},
+    )
+
+    logger.info(f"Ensured AuthBridge ConfigMaps in namespace '{namespace}'")
+
+
 def _build_agent_shipwright_build_manifest(
     request: CreateAgentRequest, clone_secret_name: Optional[str] = None
 ) -> dict:
@@ -1852,6 +1958,9 @@ def _build_env_vars(request: "CreateAgentRequest") -> List[dict]:
         List of environment variable dictionaries.
     """
     env_vars = list(DEFAULT_ENV_VARS)
+    env_vars.append(
+        {"name": AGENT_ENDPOINT, "value": get_agent_url(request.name, request.namespace)}
+    )
     if request.envVars:
         for ev in request.envVars:
             if ev.value is not None:
@@ -1987,6 +2096,7 @@ def _build_deployment_manifest(
                     },
                 },
                 "spec": {
+                    "serviceAccountName": request.name,
                     "containers": [
                         {
                             "name": "agent",
@@ -2140,6 +2250,7 @@ def _build_statefulset_manifest(
                     },
                 },
                 "spec": {
+                    "serviceAccountName": request.name,
                     "containers": [
                         {
                             "name": "agent",
@@ -2237,6 +2348,7 @@ def _build_job_manifest(
                     },
                 },
                 "spec": {
+                    "serviceAccountName": request.name,
                     "restartPolicy": "OnFailure",
                     "containers": [
                         {
@@ -2312,6 +2424,18 @@ async def create_agent(
                 raise HTTPException(
                     status_code=400,
                     detail="containerImage is required for image deployment",
+                )
+
+            # Ensure a dedicated ServiceAccount exists so the webhook's
+            # SPIFFE identity uses the workload name, not the ReplicaSet hash.
+            kube.ensure_service_account(namespace=request.namespace, name=request.name)
+
+            # Ensure AuthBridge ConfigMaps exist in the target namespace
+            if request.authBridgeEnabled:
+                _ensure_authbridge_configmaps(
+                    kube=kube,
+                    namespace=request.namespace,
+                    spire_enabled=request.spireEnabled,
                 )
 
             # Create workload based on workloadType
@@ -2697,6 +2821,18 @@ async def finalize_shipwright_build(
             authBridgeEnabled=final_auth_bridge,
             spireEnabled=final_spire_enabled,
         )
+
+        # Ensure a dedicated ServiceAccount exists so the webhook's
+        # SPIFFE identity uses the workload name, not the ReplicaSet hash.
+        kube.ensure_service_account(namespace=namespace, name=name)
+
+        # Ensure AuthBridge ConfigMaps exist in the target namespace
+        if final_auth_bridge:
+            _ensure_authbridge_configmaps(
+                kube=kube,
+                namespace=namespace,
+                spire_enabled=final_spire_enabled,
+            )
 
         # Create workload based on workloadType
         if final_workload_type == WORKLOAD_TYPE_DEPLOYMENT:

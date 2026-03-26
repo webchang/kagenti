@@ -11,8 +11,10 @@ Usage:
     pytest tests/e2e/test_agent_conversation.py -v
 """
 
+import asyncio
 import os
 import pathlib
+import logging
 
 import pytest
 import httpx
@@ -26,10 +28,17 @@ from a2a.types import (
     TaskState,
 )
 
+# LLM responses can be flaky (empty/null content from the model).
+# Retry the query up to this many times before failing.
+_LLM_QUERY_MAX_ATTEMPTS = 3
+_LLM_QUERY_RETRY_DELAY_S = 5
+
 # Import CA certificate fetching from conftest
 from kagenti.tests.e2e.conftest import (
     _fetch_openshift_ingress_ca,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _is_openshift_from_config():
@@ -137,11 +146,90 @@ def _task_diagnostic(task):
     return "\n    ".join(lines)
 
 
+async def _send_and_collect_response(client, user_message, context_id=None):
+    """Send a message to the agent and collect the response.
+
+    Returns a dict with keys: full_response, events_received, last_task, task_failed.
+    """
+    message = A2AMessage(
+        role="user",
+        parts=[TextPart(text=user_message)],
+        messageId=uuid4().hex,
+        **({"contextId": context_id} if context_id else {}),
+    )
+
+    full_response = ""
+    events_received = []
+    last_task = None
+    task_failed = False
+
+    async for result in client.send_message(message):
+        logger.debug("Received result type: %s", type(result))
+        if isinstance(result, tuple):
+            task, event = result
+            last_task = task
+            event_name = type(event).__name__ if event else "Task(final)"
+            events_received.append(event_name)
+            logger.debug("Event: %s", event_name)
+            logger.debug("Task: %s", _task_diagnostic(task))
+            if event:
+                logger.debug("Event details: %s", event)
+
+            # Check for failed task
+            status = getattr(task, "status", None)
+            if status and getattr(status, "state", None) == TaskState.failed:
+                task_failed = True
+                status_msg = getattr(status, "message", None)
+                if status_msg:
+                    full_response += _extract_text_from_parts(
+                        getattr(status_msg, "parts", [])
+                    )
+
+            # Extract from TaskArtifactUpdateEvent
+            if isinstance(event, TaskArtifactUpdateEvent):
+                if hasattr(event, "artifact") and event.artifact:
+                    extracted = _extract_text_from_parts(event.artifact.parts)
+                    logger.debug(
+                        "Extracted from TaskArtifactUpdateEvent: %s",
+                        extracted[:200] if extracted else "",
+                    )
+                    full_response += extracted
+
+            # Extract from final task (event=None means complete)
+            if event is None and task and task.artifacts:
+                logger.debug("Final task has %d artifacts", len(task.artifacts))
+                for i, artifact in enumerate(task.artifacts):
+                    extracted = _extract_text_from_parts(artifact.parts)
+                    logger.debug(
+                        "Extracted from artifact[%d]: %s",
+                        i,
+                        extracted[:200] if extracted else "",
+                    )
+                    full_response += extracted
+
+        elif isinstance(result, A2AMessage):
+            events_received.append("Message")
+            extracted = _extract_text_from_parts(result.parts)
+            logger.debug(
+                "Extracted from A2AMessage: %s",
+                extracted[:200] if extracted else "",
+            )
+            logger.debug("Message parts: %s", result.parts)
+            full_response += extracted
+
+    return {
+        "full_response": full_response,
+        "events_received": events_received,
+        "last_task": last_task,
+        "task_failed": task_failed,
+    }
+
+
 class TestWeatherAgentConversation:
     """Test weather-service agent with MCP weather-tool (works with both operators)."""
 
     @pytest.mark.asyncio
-    async def test_agent_simple_query(self):
+    async def test_agent_simple_query(self, keycloak_agent_token):
         """
         Test agent can process a simple query using A2A protocol.
 
@@ -154,6 +242,12 @@ class TestWeatherAgentConversation:
         agent_url = os.getenv("AGENT_URL", "http://localhost:8000")
         ssl_verify = _get_ssl_context()
 
+        # On OpenShift, traffic goes through AuthBridge (envoy sidecar) which
+        # requires a valid Bearer token from the kagenti Keycloak realm.
+        headers = {}
+        if keycloak_agent_token:
+            headers["Authorization"] = f"Bearer {keycloak_agent_token}"
+
         # Connect using ClientFactory (replaces deprecated A2AClient)
         # TODO: Should the agent card return the public route URL instead of
         #   the internal bind address (0.0.0.0:8000)? The A2A spec says the
@@ -161,7 +255,9 @@ class TestWeatherAgentConversation:
         #   1. Agent reads its own route hostname and sets card.url
         #   2. A proxy/gateway rewrites the card URL on the fly
         #   3. Clients override as we do here (current workaround)
-        httpx_client = httpx.AsyncClient(timeout=120.0, verify=ssl_verify)
+        httpx_client = httpx.AsyncClient(
+            timeout=120.0, verify=ssl_verify, headers=headers
+        )
         config = ClientConfig(httpx_client=httpx_client)
         try:
             from a2a.client.card_resolver import A2ACardResolver
@@ -178,74 +274,63 @@ class TestWeatherAgentConversation:
                 "Check: pod running, port-forward active, service exists"
             )
 
-        # Send message
         user_message = "What is the weather like in San Francisco?"
-        message = A2AMessage(
-            role="user",
-            parts=[TextPart(text=user_message)],
-            messageId=uuid4().hex,
-        )
 
-        full_response = ""
-        tool_invocation_detected = False
-        events_received = []
-        last_task = None
-        task_failed = False
+        # Retry on empty response — LLM can return empty/null content intermittently
+        last_result = None
+        for attempt in range(1, _LLM_QUERY_MAX_ATTEMPTS + 1):
+            try:
+                last_result = await _send_and_collect_response(client, user_message)
+            except Exception as e:
+                pytest.fail(f"Error during A2A conversation: {e}")
 
-        try:
-            async for result in client.send_message(message):
-                if isinstance(result, tuple):
-                    task, event = result
-                    last_task = task
-                    events_received.append(
-                        type(event).__name__ if event else "Task(final)"
+            if last_result["task_failed"]:
+                error_text = last_result["full_response"][:_DIAG_ERROR_LIMIT]
+                # Retry on transient MCP connectivity failures — the weather-tool
+                # pod may still be initializing when the test starts.
+                if "Cannot connect" in error_text and attempt < _LLM_QUERY_MAX_ATTEMPTS:
+                    logger.warning(
+                        "MCP connectivity error on attempt %d/%d, retrying in %ds...\n  %s",
+                        attempt,
+                        _LLM_QUERY_MAX_ATTEMPTS,
+                        _LLM_QUERY_RETRY_DELAY_S,
+                        error_text[:200],
                     )
+                    await asyncio.sleep(_LLM_QUERY_RETRY_DELAY_S)
+                    continue
+                pytest.fail(
+                    f"Agent returned a FAILED task\n"
+                    f"  Agent URL: {agent_url}\n"
+                    f"  Query: {user_message}\n"
+                    f"  Error: {error_text}\n"
+                    f"  Task details:\n    {_task_diagnostic(last_result['last_task'])}"
+                )
 
-                    # Check for failed task
-                    status = getattr(task, "status", None)
-                    if status and getattr(status, "state", None) == TaskState.failed:
-                        task_failed = True
-                        # Extract error message from failed task status
-                        status_msg = getattr(status, "message", None)
-                        if status_msg:
-                            full_response += _extract_text_from_parts(
-                                getattr(status_msg, "parts", [])
-                            )
+            if last_result["full_response"]:
+                if attempt > 1:
+                    logger.info(
+                        "Got response on attempt %d/%d",
+                        attempt,
+                        _LLM_QUERY_MAX_ATTEMPTS,
+                    )
+                break
 
-                    # Extract from TaskArtifactUpdateEvent
-                    if isinstance(event, TaskArtifactUpdateEvent):
-                        tool_invocation_detected = True
-                        if hasattr(event, "artifact") and event.artifact:
-                            full_response += _extract_text_from_parts(
-                                event.artifact.parts
-                            )
-
-                    # Extract from final task (event=None means complete)
-                    if event is None and task and task.artifacts:
-                        for artifact in task.artifacts:
-                            full_response += _extract_text_from_parts(artifact.parts)
-                        tool_invocation_detected = True
-
-                elif isinstance(result, A2AMessage):
-                    events_received.append("Message")
-                    full_response += _extract_text_from_parts(result.parts)
-
-        except Exception as e:
-            pytest.fail(f"Error during A2A conversation: {e}")
-
-        # Check for agent-side failures first
-        if task_failed:
-            pytest.fail(
-                f"Agent returned a FAILED task\n"
-                f"  Agent URL: {agent_url}\n"
-                f"  Query: {user_message}\n"
-                f"  Error: {full_response[:_DIAG_ERROR_LIMIT]}\n"
-                f"  Task details:\n    {_task_diagnostic(last_task)}"
+            logger.warning(
+                "Empty response on attempt %d/%d, retrying in %ds...",
+                attempt,
+                _LLM_QUERY_MAX_ATTEMPTS,
+                _LLM_QUERY_RETRY_DELAY_S,
             )
+            if attempt < _LLM_QUERY_MAX_ATTEMPTS:
+                await asyncio.sleep(_LLM_QUERY_RETRY_DELAY_S)
+
+        full_response = last_result["full_response"]
+        events_received = last_result["events_received"]
+        last_task = last_result["last_task"]
 
         # Validate response
         assert full_response, (
-            f"Agent did not return any response\n"
+            f"Agent did not return any response after {_LLM_QUERY_MAX_ATTEMPTS} attempts\n"
             f"  Agent URL: {agent_url}\n"
             f"  Events received: {events_received}\n"
             f"  Query: {user_message}\n"
@@ -253,9 +338,11 @@ class TestWeatherAgentConversation:
         )
         assert len(full_response) > 10, f"Agent response too short: {full_response}"
 
-        print(f"\n  Agent responded via A2A (ClientFactory)")
-        print(f"  Events: {events_received}")
-        print(f"  Response: {full_response[:200]}...")
+        logger.debug(
+            "Agent responded via A2A (ClientFactory); events=%s; response=%s...",
+            events_received,
+            full_response[:200],
+        )
 
         # Weather-related keywords that should appear if tool was called successfully
         # The tool returns actual weather data (temperature, conditions, location)
@@ -283,14 +370,17 @@ class TestWeatherAgentConversation:
             f"Response: {full_response}"
         )
 
-        print("\n✓ Agent responded successfully via A2A protocol")
-        print("✓ Weather MCP tool was invoked")
-        print(f"  Query: {user_message}")
-        print(f"  Response: {full_response[:200]}...")
+        logger.debug(
+            "Agent responded via A2A; weather MCP invoked; query=%s; response=%s...",
+            user_message,
+            full_response[:200],
+        )
 
     @pytest.mark.openshift_only
     @pytest.mark.asyncio
-    async def test_agent_multiturn_conversation(self, test_session_id):
+    async def test_agent_multiturn_conversation(
+        self, test_session_id, keycloak_agent_token
+    ):
         """
         Test multi-turn conversation maintains consistent session/context ID.
 
@@ -305,9 +395,13 @@ class TestWeatherAgentConversation:
         agent_url = os.getenv("AGENT_URL", "http://localhost:8000")
         ssl_verify = _get_ssl_context()
 
+        # AuthBridge Bearer token (see test_agent_simple_query for details)
+        headers = {}
+        if keycloak_agent_token:
+            headers["Authorization"] = f"Bearer {keycloak_agent_token}"
+
         context_id = test_session_id
-        print(f"\n=== Multi-turn Conversation Test ===")
-        print(f"Session/Context ID: {context_id}")
+        logger.debug("Multi-turn conversation test; session/context ID: %s", context_id)
 
         messages = [
             "What is the weather in Paris?",
@@ -316,7 +410,9 @@ class TestWeatherAgentConversation:
         ]
 
         # Connect using ClientFactory (override card URL for external access)
-        httpx_client = httpx.AsyncClient(timeout=120.0, verify=ssl_verify)
+        httpx_client = httpx.AsyncClient(
+            timeout=120.0, verify=ssl_verify, headers=headers
+        )
         config = ClientConfig(httpx_client=httpx_client)
         try:
             from a2a.client.card_resolver import A2ACardResolver
@@ -329,69 +425,74 @@ class TestWeatherAgentConversation:
             pytest.fail(f"Agent not reachable at {agent_url}: {e}")
 
         for turn, user_message in enumerate(messages, 1):
-            print(f"\n--- Turn {turn}: {user_message} ---")
+            logger.debug("Turn %d: %s", turn, user_message)
 
-            message = A2AMessage(
-                role="user",
-                parts=[TextPart(text=user_message)],
-                messageId=uuid4().hex,
-                contextId=context_id,
-            )
+            # Retry on empty response — LLM can return empty content intermittently
+            last_result = None
+            for attempt in range(1, _LLM_QUERY_MAX_ATTEMPTS + 1):
+                try:
+                    last_result = await _send_and_collect_response(
+                        client, user_message, context_id=context_id
+                    )
+                except Exception as e:
+                    pytest.fail(f"Turn {turn} failed: {e}")
 
-            full_response = ""
-            last_task = None
-            events_received = []
-            try:
-                async for result in client.send_message(message):
-                    if isinstance(result, tuple):
-                        task, event = result
-                        last_task = task
-                        events_received.append(
-                            type(event).__name__ if event else "Task(final)"
+                if last_result["task_failed"]:
+                    error_text = last_result["full_response"][:_DIAG_ERROR_LIMIT]
+                    if (
+                        "Cannot connect" in error_text
+                        and attempt < _LLM_QUERY_MAX_ATTEMPTS
+                    ):
+                        logger.warning(
+                            "Turn %d: MCP connectivity error on attempt %d/%d, retrying...",
+                            turn,
+                            attempt,
+                            _LLM_QUERY_MAX_ATTEMPTS,
                         )
+                        await asyncio.sleep(_LLM_QUERY_RETRY_DELAY_S)
+                        continue
+                    pytest.fail(
+                        f"Turn {turn}: Agent returned FAILED task\n"
+                        f"  Error: {error_text}\n"
+                        f"  Task details:\n"
+                        f"    {_task_diagnostic(last_result['last_task'])}"
+                    )
 
-                        # Check for failed task
-                        status = getattr(task, "status", None)
-                        if (
-                            status
-                            and getattr(status, "state", None) == TaskState.failed
-                        ):
-                            status_msg = getattr(status, "message", None)
-                            if status_msg:
-                                full_response += _extract_text_from_parts(
-                                    getattr(status_msg, "parts", [])
-                                )
-                            pytest.fail(
-                                f"Turn {turn}: Agent returned FAILED task\n"
-                                f"  Error: {full_response[:_DIAG_ERROR_LIMIT]}\n"
-                                f"  Task details:\n"
-                                f"    {_task_diagnostic(last_task)}"
-                            )
+                if last_result["full_response"]:
+                    if attempt > 1:
+                        logger.info(
+                            "Turn %d: got response on attempt %d/%d",
+                            turn,
+                            attempt,
+                            _LLM_QUERY_MAX_ATTEMPTS,
+                        )
+                    break
 
-                        if isinstance(event, TaskArtifactUpdateEvent):
-                            if event.artifact:
-                                full_response += _extract_text_from_parts(
-                                    event.artifact.parts
-                                )
-                        if event is None and task and task.artifacts:
-                            for artifact in task.artifacts:
-                                full_response += _extract_text_from_parts(
-                                    artifact.parts
-                                )
-                    elif isinstance(result, A2AMessage):
-                        full_response += _extract_text_from_parts(result.parts)
-            except Exception as e:
-                pytest.fail(f"Turn {turn} failed: {e}")
+                logger.warning(
+                    "Turn %d: empty response on attempt %d/%d, retrying in %ds...",
+                    turn,
+                    attempt,
+                    _LLM_QUERY_MAX_ATTEMPTS,
+                    _LLM_QUERY_RETRY_DELAY_S,
+                )
+                if attempt < _LLM_QUERY_MAX_ATTEMPTS:
+                    await asyncio.sleep(_LLM_QUERY_RETRY_DELAY_S)
 
-            assert full_response, (
-                f"Turn {turn}: Agent did not return any response\n"
-                f"  Events received: {events_received}\n"
-                f"  Task details:\n    {_task_diagnostic(last_task)}"
+            assert last_result["full_response"], (
+                f"Turn {turn}: Agent did not return any response"
+                f" after {_LLM_QUERY_MAX_ATTEMPTS} attempts\n"
+                f"  Events received: {last_result['events_received']}\n"
+                f"  Task details:\n    {_task_diagnostic(last_result['last_task'])}"
             )
-            print(f"  Response: {full_response[:100]}...")
+            logger.debug(
+                "Turn %d response: %s...", turn, last_result["full_response"][:100]
+            )
 
-        print(f"\n  Multi-turn conversation completed ({len(messages)} turns)")
-        print(f"  Context ID: {context_id}")
+        logger.debug(
+            "Multi-turn conversation completed (%d turns); context ID: %s",
+            len(messages),
+            context_id,
+        )
 
 
 if __name__ == "__main__":

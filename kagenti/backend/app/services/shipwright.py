@@ -144,7 +144,7 @@ def build_shipwright_build_manifest(
     )
 
     # Build resource configuration to store in annotation
-    # This will be used when finalizing the build to create the Agent/MCPServer CRD
+    # This will be used when finalizing the build to create the Agent/MCPServer Deployment
     if resource_config is None:
         resource_config = {}
 
@@ -208,7 +208,7 @@ def build_shipwright_build_manifest(
         manifest["spec"]["paramValues"].append(
             {
                 "name": "build-args",
-                "values": [{"value": arg} for arg in build_config.buildArgs],
+                "values": [{"value": f"--build-arg={arg}"} for arg in build_config.buildArgs],
             }
         )
 

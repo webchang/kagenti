@@ -29,6 +29,8 @@ Your assistance in improving documentation is highly valued, regardless of your 
 
 To claim an issue that you are interested in, kindly leave a comment on the issue and request the maintainers to assign it to you.
 
+Alternatively, comment `/claim` on the issue to have it automatically assigned to you. Issues labeled `blocked` or `in-progress` cannot be claimed this way.
+
 ### Committing
 
 We encourage all contributors to adopt [best practices in git commit management](https://www.futurelearn.com/info/blog/telling-stories-with-your-git-history) to facilitate efficient reviews and retrospective analysis. Your git commits should provide ample context for reviewers and future codebase readers.
@@ -53,6 +55,11 @@ The pull request template has been designed to assist you in communicating this 
 Smaller pull requests are typically easier to review and merge than larger ones. If your pull request is big, it is always recommended to collaborate with the maintainers to find the best way to divide it.
 
 See the [making PR](./docs/dev-guide.md#making-a-pr) document for detailed instructions.
+
+## Releasing
+
+Maintainers: see the [Releasing Guide](./docs/releasing.md) for how to create
+tags, pre-releases, and stable (GA) releases across the Kagenti organization.
 
 ## Contributing Documentation
 

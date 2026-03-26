@@ -1,4 +1,4 @@
-{{- if .Values.components.otel.enabled }}
+{{- if and .Values.components.otel.enabled (ne ((.Values.phoenix).database).type "sqlite") }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -83,7 +83,7 @@ spec:
             secretKeyRef:
               name: otel-db-secret
               key: password
-        image: quay.io/fedora/postgresql-15
+        image: quay.io/sclorg/postgresql-16-c9s:latest
         imagePullPolicy: IfNotPresent
         name: postgres
         ports:

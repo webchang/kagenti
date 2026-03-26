@@ -102,104 +102,31 @@ type: kubernetes.io/dockerconfigjson
 data:
   .dockerconfigjson: {{ (printf "{\"auths\":{\"quay.io\":{\"username\":\"%s\",\"password\":\"%s\",\"auth\":\"%s\"}}}" $.Values.secrets.quayUser $.Values.secrets.quayToken (printf "%s:%s" $.Values.secrets.quayUser $.Values.secrets.quayToken | b64enc)) | b64enc }}
 ---
+{{- if not $root.Values.keycloak.adminExistingSecret }}
 # ——————————————————————————————————————————————————————————————————————————————
-#  ConfigMap for Environment Variables in Namespace: {{ . }}
+#  Secret for Keycloak Admin Credentials in Namespace: {{ . }}
+#  Used by the client-registration sidecar to register agents as OAuth clients.
 # ——————————————————————————————————————————————————————————————————————————————
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
-  name: environments
+  name: keycloak-admin-secret
   namespace: {{ . }}
   labels:
     {{- include "kagenti.labels" $root | nindent 4 }}
-data:
-  ollama: |
-    [
-      {"name": "LLM_API_BASE", "value": "http://host.docker.internal:11434/v1"},
-      {"name": "LLM_API_KEY", "value": "dummy"},
-      {"name": "LLM_MODEL", "value": "llama3.2:3b-instruct-fp16"}
-    ]
-  openai: |
-    [
-      {
-        "name": "OPENAI_API_KEY",
-        "valueFrom": {"secretKeyRef": {"name": "openai-secret", "key": "apikey"}}
-      },
-      {
-        "name": "LLM_API_KEY",
-        "valueFrom": {"secretKeyRef": {"name": "openai-secret", "key": "apikey"}}
-      },
-      {"name": "LLM_API_BASE", "value": "https://llama-4-scout-17b-16e-w4a16-maas-apicast-production.apps.prod.rhoai.rh-aiservices-bu.com:443/v1"},
-      {"name": "LLM_MODEL", "value": "llama-4-scout-17b-16e-w4a16"}
-    ]
-  mcp-weather: |
-    [
-      {"name": "MCP_URL", "value": "http://mcp-weather-tool-proxy:8000/mcp"}
-    ]
-  mcp-slack: |
-    [
-      {"name": "MCP_URL", "value": "http://mcp-slack-tool-proxy:8000/mcp"}
-    ]
-  slack-researcher-config: |
-    [
-      {"name": "EXTRA_HEADERS", "value": "{}"},
-      {"name": "MODEL_TEMPERATURE", "value": "0"},
-      {"name": "MAX_PLAN_STEPS", "value": "6"},
-      {"name": "SERVICE_PORT", "value": "8000"},
-      {"name": "LOG_LEVEL", "value": "INFO"}
-    ]
-  slack-researcher-auth-config: |
-    [
-      {
-        "name": "CLIENT_SECRET",
-        "valueFrom": {"secretKeyRef": {"name": "kagenti-keycloak-client-secret", "key": "client-secret"}}
-      },
-      {
-        "name": "ISSUER",
-        "value": "{{ $root.Values.keycloak.publicUrl }}/realms/{{ $root.Values.keycloak.realm }}"
-      },
-      {
-        "name": "JWKS_URI",
-        "value": "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/{{ $root.Values.keycloak.realm }}/protocol/openid-connect/certs"
-      },
-      {
-        "name": "AUDIENCE",
-        "value": "{{ $root.Values.agentOAuthSecret.spiffePrefix }}/slack-researcher"
-      }
-    ]
-  mcp-slack-config: |
-    [
-      {
-        "name": "SLACK_BOT_TOKEN",
-        "valueFrom": {"secretKeyRef": {"name": "slack-secret", "key": "bot-token"}}
-      }
-    ]
-  mcp-slack-auth-config: |
-    [
-      {
-        "name": "ISSUER",
-        "value": "{{ $root.Values.keycloak.publicUrl }}/realms/{{ $root.Values.keycloak.realm }}"
-      },
-      {
-        "name": "JWKS_URI",
-        "value": "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/{{ $root.Values.keycloak.realm }}/protocol/openid-connect/certs"
-      },
-      {
-        "name": "AUDIENCE",
-        "value": "{{ $root.Values.agentOAuthSecret.spiffePrefix }}/slack-tool"
-      },
-      {
-        "name": "ADMIN_SLACK_BOT_TOKEN",
-        "valueFrom": {"secretKeyRef": {"name": "slack-secret", "key": "admin-bot-token"}}
-      },
-      {
-        "name": "ADMIN_SCOPE_NAME",
-        "value": "slack-full-access"
-      }
-    ]
+type: Opaque
+stringData:
+  KEYCLOAK_ADMIN_USERNAME: {{ $root.Values.keycloak.adminUsername | quote }}
+  KEYCLOAK_ADMIN_PASSWORD: {{ $root.Values.keycloak.adminPassword | quote }}
 ---
+{{- end }}
+
 # ——————————————————————————————————————————————————————————————————————————————
 #  ConfigMap for AuthBridge in Namespace: {{ . }}
+#  Unified config for both client-registration and envoy-proxy (go-processor).
+#  client-registration reads: KEYCLOAK_URL, KEYCLOAK_REALM, PLATFORM_CLIENT_IDS
+#  go-processor reads: KEYCLOAK_URL, KEYCLOAK_REALM (to derive TOKEN_URL/ISSUER),
+#                      ISSUER (explicit override for split-horizon DNS)
 # ——————————————————————————————————————————————————————————————————————————————
 apiVersion: v1
 kind: ConfigMap
@@ -207,10 +134,13 @@ metadata:
   name: authbridge-config
   namespace: {{ . }}
 data:
-  TOKEN_URL: "http://keycloak-service.{{ $root.Values.keycloak.namespace }}.svc:8080/realms/{{ $root.Values.keycloak.realm }}/protocol/openid-connect/token"
+  KEYCLOAK_URL: "http://keycloak-service.{{ $root.Values.keycloak.namespace }}.svc:8080"
+  KEYCLOAK_REALM: {{ $root.Values.keycloak.realm | quote }}
+  # ISSUER: Optional. Auto-derived from KEYCLOAK_URL + KEYCLOAK_REALM if not set.
+  # Set explicitly when the internal KEYCLOAK_URL differs from the frontend URL
+  # that appears in token "iss" claims (split-horizon DNS).
   ISSUER: "{{ $root.Values.keycloak.publicUrl }}/realms/{{ $root.Values.keycloak.realm }}"
-  TARGET_AUDIENCE: "auth-target"
-  TARGET_SCOPES: "openid auth-target-aud"
+  SPIRE_ENABLED: {{ if $root.Values.spire.enabled }}"true"{{ else }}"false"{{ end }}
 ---
 # ——————————————————————————————————————————————————————————————————————————————
 #  ConfigMap for Envoy in Namespace: {{ . }}
@@ -393,26 +323,34 @@ subjects:
     namespace: {{ . }}
 ---
 # ——————————————————————————————————————————————————————————————————————————————
-#  SCC RoleBinding for Default SA in Namespace: {{ . }}
-#  Grants privileged SCC to the default service account to allow Istio
-#  proxy-init containers that require runAsUser:0 and privileged:true
-#  for iptables setup.
+#  SCC RoleBinding for AuthBridge in Namespace: {{ . }}
+#  Grants the kagenti-authbridge custom SCC to all service accounts so that
+#  the webhook-injected AuthBridge stack can run:
+#    - proxy-init init container (NET_ADMIN/NET_RAW, root) for iptables
+#    - envoy-proxy sidecar (UID 1337)
+#    - spiffe-helper / client-registration sidecars (UID 1000)
+#  Agent SAs are created dynamically by the operator (name = agent name),
+#  so we use the namespace service accounts group.
+#
+#  Requires kagenti-extensions#234 (webhook uses capabilities instead of
+#  privileged mode). Use --extensions-ref to test:
+#    /run-e2e --extensions-ref fix/proxy-init-drop-privileged
 # ——————————————————————————————————————————————————————————————————————————————
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: default-privileged-scc
+  name: agent-authbridge-scc
   namespace: {{ . }}
   labels:
     {{- include "kagenti.labels" $root | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: system:openshift:scc:privileged
+  name: system:openshift:scc:kagenti-authbridge
 subjects:
-  - kind: ServiceAccount
-    name: default
-    namespace: {{ . }}
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: system:serviceaccounts:{{ . }}
 {{- end }}
 {{- end }}
 {{- end }}
