@@ -11,6 +11,7 @@ from app.core.config import settings
 CRD_GROUP = settings.crd_group
 CRD_VERSION = settings.crd_version
 AGENTS_PLURAL = settings.agents_plural
+AGENTRUNTIMES_PLURAL = settings.agentruntimes_plural
 
 # Labels - Keys
 KAGENTI_TYPE_LABEL = settings.kagenti_type_label
@@ -33,6 +34,15 @@ APP_KUBERNETES_IO_COMPONENT = "app.kubernetes.io/component"
 KAGENTI_SPIRE_LABEL = "kagenti.io/spire"
 KAGENTI_SPIRE_ENABLED_VALUE = "enabled"
 
+# Per-sidecar injection labels (matched by kagenti-webhook precedence evaluator)
+KAGENTI_ENVOY_PROXY_INJECT_LABEL = "kagenti.io/envoy-proxy-inject"
+KAGENTI_SPIFFE_HELPER_INJECT_LABEL = "kagenti.io/spiffe-helper-inject"
+KAGENTI_CLIENT_REGISTRATION_INJECT_LABEL = "kagenti.io/client-registration-inject"
+
+# Port exclusion annotations (matched by kagenti-webhook init-iptables.sh)
+KAGENTI_OUTBOUND_PORTS_EXCLUDE = "kagenti.io/outbound-ports-exclude"
+KAGENTI_INBOUND_PORTS_EXCLUDE = "kagenti.io/inbound-ports-exclude"
+
 # Labels - Values
 KAGENTI_UI_CREATOR_LABEL = "kagenti-ui"
 KAGENTI_OPERATOR_LABEL_NAME = "kagenti-operator"
@@ -40,6 +50,8 @@ KAGENTI_OPERATOR_LABEL_NAME = "kagenti-operator"
 # Resource types
 RESOURCE_TYPE_AGENT = "agent"
 RESOURCE_TYPE_TOOL = "tool"
+RESOURCE_TYPE_SKILL = "skill"
+
 
 # Protocol values
 VALUE_PROTOCOL_A2A = "a2a"
@@ -57,13 +69,24 @@ TOOL_SERVICE_SUFFIX = "-mcp"
 WORKLOAD_TYPE_DEPLOYMENT = "deployment"
 WORKLOAD_TYPE_STATEFULSET = "statefulset"
 WORKLOAD_TYPE_JOB = "job"
+WORKLOAD_TYPE_SANDBOX = "sandbox"
 
-# Supported workload types
-SUPPORTED_WORKLOAD_TYPES = [
+# agent-sandbox CRD coordinates (kubernetes-sigs/agent-sandbox)
+AGENT_SANDBOX_CRD_GROUP = "agents.x-k8s.io"
+AGENT_SANDBOX_CRD_VERSION = "v1alpha1"
+AGENT_SANDBOX_PLURAL = "sandboxes"
+
+
+# Supported workload types (sandbox added conditionally at startup)
+_BASE_WORKLOAD_TYPES = (
     WORKLOAD_TYPE_DEPLOYMENT,
     WORKLOAD_TYPE_STATEFULSET,
     WORKLOAD_TYPE_JOB,
-]
+)
+SUPPORTED_WORKLOAD_TYPES = list(
+    _BASE_WORKLOAD_TYPES
+    + ((WORKLOAD_TYPE_SANDBOX,) if settings.kagenti_feature_flag_agent_sandbox else ())
+)
 
 # Namespace labels
 ENABLED_NAMESPACE_LABEL_KEY = settings.enabled_namespace_label_key
@@ -103,8 +126,8 @@ SHIPWRIGHT_STRATEGY_INSECURE = "buildah-insecure-push"
 # For external registries with TLS (quay.io, ghcr.io, docker.io)
 SHIPWRIGHT_STRATEGY_SECURE = "buildah"
 
-# Default internal registry URL (for dev/kind clusters)
-DEFAULT_INTERNAL_REGISTRY = "registry.cr-system.svc.cluster.local:5000"
+# Default internal registry URL (configurable via DEFAULT_REGISTRY_URL env var)
+DEFAULT_INTERNAL_REGISTRY = settings.default_registry_url
 
 # Default resource limits
 DEFAULT_RESOURCE_LIMITS = {"cpu": "500m", "memory": "1Gi"}
@@ -132,6 +155,16 @@ DEFAULT_ENV_VARS = [
     {"name": "UV_CACHE_DIR", "value": "/app/.cache/uv"},
 ]
 
+
+# Skill management constants
+SKILL_TYPE_LABEL = "kagenti.io/type"
+SKILL_TYPE_VALUE = "skill"
+SKILL_CATEGORY_LABEL = "kagenti.io/category"
+SKILL_DESCRIPTION_ANNOTATION = "kagenti.io/description"
+SKILL_ORIGIN_ANNOTATION = "kagenti.io/origin"
+SKILL_USAGE_ANNOTATION = "kagenti.io/usage-count"
+SKILL_FILE_PATHS_ANNOTATION = "kagenti.io/file-paths"
+SKILL_STATUS_READY = "Ready"
 # Environment variable name for the agent endpoint (the agent card URL for the agent)
 AGENT_ENDPOINT = "AGENT_ENDPOINT"
 
@@ -233,6 +266,15 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
     filter_chains:
+    # AuthBridge config and stats passthrough
+    - filter_chain_match:
+        destination_port: 9093
+      filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: outbound_passthrough_9093
+          cluster: original_destination
     - filters:
       - name: envoy.filters.network.http_connection_manager
         typed_config:

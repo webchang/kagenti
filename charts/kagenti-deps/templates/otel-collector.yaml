@@ -120,7 +120,7 @@ spec:
             items:
               - key: ca-bundle.crt
                 path: tls-ca-bundle.pem
-        # OpenShift ingress CA for external Keycloak HTTPS
+        # OpenShift ingress CA for Keycloak JWKS verification via ingress route
         # Copied from openshift-config-managed/default-ingress-cert by pre-install Job
         - name: ingress-ca
           configMap:

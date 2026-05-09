@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 
 # Stage 1: Build stage with uv
-FROM python:3.14-slim@sha256:6a27522252aef8432841f224d9baaa6e9fce07b07584154fa0b9a96603af7456 AS builder
+FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033 AS builder
 
 WORKDIR /app
 
@@ -12,13 +12,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.24@sha256:816fdce3387ed2142e37d2e56e1b1b97c
 # Copy dependency files
 COPY backend/pyproject.toml ./
 
-# Create virtual environment and install dependencies
+# Create virtual environment and install dependencies (not the app package itself —
+# the runtime stage copies fresh source via COPY backend/app/)
 RUN uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install --no-cache .
+    uv pip install --no-cache -r pyproject.toml
 
 # Stage 2: Runtime stage
-FROM python:3.14-slim@sha256:6a27522252aef8432841f224d9baaa6e9fce07b07584154fa0b9a96603af7456
+FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
 
 WORKDIR /app
 

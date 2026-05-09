@@ -22,6 +22,7 @@ import {
   ChartLineIcon,
   NetworkIcon,
   ExternalLinkAltIcon,
+  CubesIcon,
 } from '@patternfly/react-icons';
 import { useQuery } from '@tanstack/react-query';
 
@@ -52,7 +53,7 @@ const DashboardCard: React.FC<DashboardCardProps> = ({
           {title}
         </span>
       </CardTitle>
-      <CardBody>
+      <CardBody style={{ minHeight: '120px' }}>
         <Text component="p">{description}</Text>
         {isLoading ? (
           <Skeleton width="80%" style={{ marginTop: '8px' }} />
@@ -93,6 +94,7 @@ export const ObservabilityPage: React.FC = () => {
   // The backend provides fallback URLs if the ConfigMap values are not set
   const tracesUrl = dashboards?.traces || '';
   const networkUrl = dashboards?.network || '';
+  const mlflowUrl = dashboards?.mlflow || '';
 
   return (
     <>
@@ -122,7 +124,7 @@ export const ObservabilityPage: React.FC = () => {
 
         <Grid hasGutter>
           {tracesUrl && (
-            <GridItem md={6}>
+            <GridItem md={6} lg={4}>
               <DashboardCard
                 title="Tracing & Performance"
                 description="Access detailed trace data for debugging and performance analysis. Monitor LLM calls, latency, and token usage with Phoenix/OpenTelemetry."
@@ -134,7 +136,7 @@ export const ObservabilityPage: React.FC = () => {
             </GridItem>
           )}
 
-          <GridItem md={tracesUrl ? 6 : 12}>
+          <GridItem md={6} lg={4}>
             <DashboardCard
               title="Network Traffic"
               description="Visualize service interactions, traffic flow, and service mesh health with Kiali. Monitor Istio metrics and network policies."
@@ -144,18 +146,45 @@ export const ObservabilityPage: React.FC = () => {
               isLoading={isLoading}
             />
           </GridItem>
+
+          {mlflowUrl && (
+            <GridItem md={6} lg={4}>
+              <DashboardCard
+                title="MLflow"
+                description="Track experiments, model runs, and LLM traces with MLflow."
+                icon={<CubesIcon />}
+                url={mlflowUrl}
+                buttonText="Open MLflow"
+                isLoading={isLoading}
+              />
+            </GridItem>
+          )}
         </Grid>
 
-        <Alert
-          variant="info"
-          title="Note"
-          isInline
-          style={{ marginTop: '24px' }}
-        >
-          Ensure that the observability tools ({tracesUrl ? 'Phoenix for traces and ' : ''}Kiali for
-          service mesh) are properly configured and accessible from your
-          environment.
-        </Alert>
+        {(() => {
+          const tools = [
+            tracesUrl && 'Phoenix for traces',
+            'Kiali for service mesh',
+            mlflowUrl && 'MLflow for experiment tracking',
+          ].filter(Boolean) as string[];
+          const toolList =
+            tools.length <= 1
+              ? tools.join('')
+              : tools.length === 2
+              ? tools.join(' and ')
+              : `${tools.slice(0, -1).join(', ')}, and ${tools[tools.length - 1]}`;
+          return (
+            <Alert
+              variant="info"
+              title="Note"
+              isInline
+              style={{ marginTop: '24px' }}
+            >
+              Ensure that the observability tools ({toolList}) are properly
+              configured and accessible from your environment.
+            </Alert>
+          );
+        })()}
       </PageSection>
     </>
   );

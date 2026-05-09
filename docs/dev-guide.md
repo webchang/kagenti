@@ -59,6 +59,25 @@ pre-commit run --all-files
 
 VSCode extensions such as this [pre-commit-helper](https://marketplace.visualstudio.com/items?itemName=elagil.pre-commit-helper) can be configured to run directly when files are saved in VSCode.
 
+### Feature Flags
+
+All new features **must** be gated behind a feature flag that defaults to
+**disabled**. This is a hard requirement — PRs that introduce user-visible
+functionality without a flag will be asked to add one.
+
+**How to add a flag:**
+
+1. Add `kagenti_feature_flag_<name>: bool = False` to
+   `kagenti/backend/app/core/config.py` with a descriptive comment.
+2. Add the flag to `FeatureFlagsResponse` in `kagenti/backend/app/routers/config.py`
+   so the frontend can read it.
+3. Guard module loading in `kagenti/backend/app/main.py` using the existing
+   conditional import pattern.
+4. Enable via environment variable: `KAGENTI_FEATURE_FLAG_<NAME>=true`.
+
+See [CLAUDE.md — Feature Flags](../CLAUDE.md#feature-flags-required) for the
+full policy and current flag inventory.
+
 ### Making a PR
 
 Work on your local repo cloned from your fork. Create a branch:
@@ -386,7 +405,6 @@ Before creating hosted clusters, you need:
    - AWS CLI configured
    - kubectl and oc CLI
    - jq for JSON processing
-   - Ansible (installed automatically by setup script)
 
 ### Setting Up HyperShift Credentials
 
@@ -485,7 +503,7 @@ After creating a cluster, run the full E2E test suite:
 
 **Test workflow:**
 1. Sets up kubeconfig for hosted cluster
-2. Deploys Kagenti platform via Ansible
+2. Deploys Kagenti platform
 3. Runs E2E test suite (`kagenti/tests/e2e/`)
 4. Optionally destroys cluster after tests
 

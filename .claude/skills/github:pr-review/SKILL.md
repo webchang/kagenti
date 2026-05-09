@@ -19,12 +19,22 @@ flowchart TD
 
 # PR Review
 
-Automated code review workflow for the kagenti/kagenti repository. Gathers PR data,
+Automated code review workflow. Gathers PR data,
 analyzes the diff, checks against repo conventions and CI, drafts inline review
 comments, and posts a GitHub review after user approval.
 
+## Variables
+
+Set at session start:
+
+```bash
+export OWNER=<org-or-user>
+export REPO=<repo-name>
+```
+
 ## Table of Contents
 
+- [Variables](#variables)
 - [When to Use](#when-to-use)
 - [Context-Safe Execution](#context-safe-execution-mandatory)
 - [Phase 1: Gather PR Data](#phase-1-gather-pr-data)
@@ -268,7 +278,8 @@ Severity levels:
 - **must-fix** - Blocks merge. Security issues, broken functionality, missing sign-off.
 - **suggestion** - Should fix but not blocking. Better patterns, missing tests.
 - **nit** - Trivial. Style, naming, minor improvements.
-- **praise** - Highlight good patterns worth calling out.
+
+Do NOT include praise comments — they clutter the review without adding value.
 
 ### 4.2 Summary Comment
 
@@ -283,10 +294,14 @@ Severity levels:
 
 ### 4.3 Verdict
 
-One of:
-- **APPROVE** - No must-fix issues, PR follows conventions
-- **REQUEST_CHANGES** - Has must-fix issues that block merge
-- **COMMENT** - Suggestions only, author can decide
+Decision tree (follow in order):
+
+1. **Any must-fix issues?** → **REQUEST_CHANGES**
+2. **No must-fix issues?** → **APPROVE**
+
+That's it. Suggestions and nits are included as inline comments within the
+APPROVE review — they do NOT downgrade the verdict. Never use COMMENT as the event;
+it withholds approval unnecessarily when there are no blocking issues.
 
 ### 4.4 User Approval
 
@@ -307,11 +322,11 @@ After user approves, post the review via GitHub API.
 ```bash
 # Build the review payload as JSON (gh api does NOT support array params via -f)
 # For each inline comment: path, line (in the file on HEAD side), body
-# event: APPROVE, REQUEST_CHANGES, or COMMENT
+# event: APPROVE (default when no must-fix) or REQUEST_CHANGES (when must-fix exists)
 
 cat <<'EOF' | gh api repos/{owner}/{repo}/pulls/<number>/reviews --method POST --input -
 {
-  "event": "COMMENT",
+  "event": "APPROVE",
   "body": "Review summary text...",
   "comments": [
     {"path": "path/to/file.py", "line": 42, "body": "Comment text..."},
@@ -321,6 +336,9 @@ cat <<'EOF' | gh api repos/{owner}/{repo}/pulls/<number>/reviews --method POST -
 EOF
 ```
 
+> **Note**: Use `"event": "APPROVE"` when there are no must-fix issues (even if there
+> are suggestions/nits). Only use `"event": "REQUEST_CHANGES"` when must-fix issues exist.
+
 > **Note**: `gh api` is NOT auto-approved. The user will be prompted to approve
 > the review submission. This is intentional — reviews are write operations.
 
@@ -329,7 +347,7 @@ EOF
 After posting, confirm with a link:
 
 ```markdown
-Review submitted on PR #<number>: https://github.com/kagenti/kagenti/pull/<number>
+Review submitted on PR #<number>: https://github.com/$OWNER/$REPO/pull/<number>
 - Verdict: APPROVE / REQUEST_CHANGES / COMMENT
 - Inline comments: N
 ```
@@ -362,7 +380,7 @@ Use the diff file for all analysis.
 ### Cross-repo reviews
 
 When verifying cross-repo dependency files (e.g. checking whether `kagenti-extensions`
-already handles something being removed from `kagenti/kagenti`), **always fetch directly
+already handles something being removed from `$OWNER/$REPO`), **always fetch directly
 from GitHub — never trust a local clone:**
 
 ```bash
@@ -418,7 +436,7 @@ Use JSON input instead:
 ```bash
 cat <<'EOF' | gh api repos/{owner}/{repo}/pulls/<number>/reviews --method POST --input -
 {
-  "event": "COMMENT",
+  "event": "APPROVE",
   "body": "Review summary...",
   "comments": [
     {"path": "file.py", "line": 42, "body": "Comment text..."}

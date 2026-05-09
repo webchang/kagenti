@@ -541,6 +541,12 @@ body {
   height: 36px;
 }
 
+.kagenti-brand-version {
+  font-size: 0.75rem;
+  color: #ffffff;
+  margin-left: 0.5rem;
+}
+
 /* Content area */
 .kagenti-content {
   flex: 1;
@@ -845,9 +851,42 @@ code {
   color: #ffffff;
 }
 
+/* FormSelect option styling in dark mode */
+[data-theme="dark"] .pf-v5-c-form-control > option {
+  background-color: #212427;
+  color: #ffffff;
+}
+
 /* Spinner color */
 [data-theme="dark"] .pf-v5-c-spinner {
   --pf-v5-c-spinner--Color: #73bcf7;
+}
+
+/* Switch styling - dark mode label text */
+[data-theme="dark"] .pf-v5-c-switch__label {
+  color: #ffffff !important;
+}
+
+[data-theme="dark"] .pf-v5-c-switch__input:checked ~ .pf-v5-c-switch__label {
+  color: #ffffff !important;
+}
+
+/* FormGroup helper text - dark mode */
+[data-theme="dark"] .pf-v5-c-form__helper-text {
+  color: #c9c9c9 !important;
+}
+
+[data-theme="dark"] .pf-v5-c-helper-text__item-text {
+  color: #c9c9c9 !important;
+}
+
+/* ProgressStepper - dark mode */
+[data-theme="dark"] .pf-v5-c-progress-stepper__step-title {
+  color: #ffffff !important;
+}
+
+[data-theme="dark"] .pf-v5-c-progress-stepper__step-description {
+  color: #c9c9c9 !important;
 }
 
 /* Label styling - OpenShift Console design guide (PatternFly tokens) */

@@ -7,7 +7,7 @@ This directory contains the official Kagenti project documentation.
 If you are new to Kagenti, we recommend the following flow to get started with a local Kind cluster. 
 
 1. [Installation Guide](./install.md): Step-by-step instructions to start a Kind cluster and install all prerequisite components
-2. [Quickstart Weather Agent](https://github.com/kagenti/kagenti-extensions/blob/main/AuthBridge/demos/weather-agent/demo-ui.md): Deploy your first agent with AuthBridge security.
+2. [Quickstart Weather Agent](https://github.com/kagenti/kagenti-extensions/blob/main/authbridge/demos/weather-agent/demo-ui.md): Deploy your first agent with AuthBridge security.
 
 Kagenti is built on existing open-source cloud-native technologies. 
 
@@ -16,6 +16,12 @@ Kagenti is built on existing open-source cloud-native technologies.
 ## Demos and Tutorials
 
 For a complete list of available demos and tutorials, see the [Demos Documentation](./demos/README.md).
+## Vision & Use Cases
+
+- [Use Cases](./user-stories.md) — Platform-wide scenarios organized by persona: deployment, governance, observability, identity, developer experience, and more.
+- [Use Case Types](./use-case-types.md) — Taxonomy of agent operational models the platform supports (read-only insight, synchronous task, async task, monitoring, event-driven).
+- [Personas and Roles](../PERSONAS_AND_ROLES.md) — The people who use and operate Kagenti.
+
 ## Core Concepts
 
 Through this incubation project, we have identified several core components: 
@@ -34,6 +40,6 @@ This repo provides a UI to interface with the operator and deployed agents and t
 
 ## Community
 
-For additional queries, join [our Discord](https://discord.gg/aJ92dNDzqB). 
+For additional queries, join us on [Slack](https://ibm.biz/kagenti-slack). 
 
 If you would like to contribute, feel free to submit a pull request! Please see our [CONTRIBUTING guidelines](../CONTRIBUTING.md). 

@@ -1,7 +1,7 @@
 # Keycloak Configuration for GitHub Issue Demo
 
 This script configures Keycloak for the
-[GitHub Issue Demo](https://github.com/kagenti/kagenti-extensions/blob/main/AuthBridge/demos/github-issue/demo.md).
+[GitHub Issue Demo](https://github.com/kagenti/kagenti-extensions/blob/main/authbridge/demos/github-issue/demo.md).
 Logging into Kagenti with accounts of different
 permissions affects the results those accounts receive.
 
@@ -56,13 +56,10 @@ The script assumes the existence of:
 
 ## Instructions
 
-Run the Ansible-based installer:
+Run the installer:
 
 ```sh
-cp deployments/envs/secret_values.yaml.example \
-  deployments/envs/.secret_values.yaml
-# Edit deployments/envs/.secret_values.yaml with your values
-deployments/ansible/run-install.sh --env dev
+scripts/kind/setup-kagenti.sh
 ```
 
 Then set the Keycloak admin username:

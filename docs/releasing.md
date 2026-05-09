@@ -3,6 +3,9 @@
 This guide describes how maintainers create tags, pre-releases, and stable (GA)
 releases across the Kagenti organization.
 
+> **Policy:** For branching strategy, support windows, and governance decisions,
+> see [docs/release-sop.md](release-sop.md).
+>
 > **AI-assisted releases:** Use the `/release` skill to walk through the release
 > process interactively. See [Using the Release Skill](#using-the-release-skill)
 > at the end of this guide for examples.
@@ -53,7 +56,7 @@ GA release notes should include a compatibility table:
 | agent-examples | v0.2.0 |
 ```
 
-Users who install via the Ansible installer or Helm charts do not need to manage
+Users who install via Helm charts do not need to manage
 version compatibility manually — checking out a Kagenti release tag gives a
 consistent, tested set of components.
 
@@ -301,7 +304,7 @@ A GA release is the final, stable, production-ready version.
    - [ ] Installation guide version references are up to date
 
 7. **Announce** the release:
-   - [Discord](https://discord.gg/aJ92dNDzqB)
+   - [Slack](https://ibm.biz/kagenti-slack)
    - [Mailing list](mailto:kagenti-maintainers@googlegroups.com)
    - Consider a blog post for major releases
 
@@ -409,7 +412,7 @@ The skill will:
 2. Pin all image and chart versions to GA tags
 3. Tag all repos in order and verify artifacts
 4. Generate full release notes with a component compatibility table
-5. Draft an announcement for Discord and the mailing list
+5. Draft an announcement for Slack and the mailing list
 
 **Cut a patch release:**
 

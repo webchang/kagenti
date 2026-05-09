@@ -3,6 +3,7 @@
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { workloadTypeColor } from '@/utils/workloadType';
 import {
   PageSection,
   Title,
@@ -50,6 +51,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Agent } from '@/types';
 import { agentService } from '@/services/api';
 import { NamespaceSelector } from '@/components/NamespaceSelector';
+import { SandboxWizard } from '@/components/SandboxWizard';
 
 export const AgentCatalogPage: React.FC = () => {
   const navigate = useNavigate();
@@ -59,6 +61,8 @@ export const AgentCatalogPage: React.FC = () => {
   const [agentToDelete, setAgentToDelete] = useState<Agent | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [reconfigureModalOpen, setReconfigureModalOpen] = useState(false);
+  const [agentToReconfigure, setAgentToReconfigure] = useState<Agent | null>(null);
 
   const {
     data: agents = [],
@@ -86,6 +90,12 @@ export const AgentCatalogPage: React.FC = () => {
     },
   });
 
+  const handleReconfigureClick = (agent: Agent) => {
+    setAgentToReconfigure(agent);
+    setReconfigureModalOpen(true);
+    setOpenMenuId(null);
+  };
+
   const handleDeleteClick = (agent: Agent) => {
     setAgentToDelete(agent);
     setDeleteModalOpen(true);
@@ -112,13 +122,7 @@ export const AgentCatalogPage: React.FC = () => {
   const renderWorkloadType = (workloadType: string | undefined) => {
     const type = workloadType || 'deployment';
     const label = type.charAt(0).toUpperCase() + type.slice(1);
-    let color: 'grey' | 'orange' | 'gold' = 'grey';
-    if (type === 'job') {
-      color = 'orange';
-    } else if (type === 'statefulset') {
-      color = 'gold';
-    }
-    return <Label color={color} isCompact>{label}</Label>;
+    return <Label color={workloadTypeColor(type)} isCompact>{label}</Label>;
   };
 
   const renderStatusBadge = (status: string) => {
@@ -284,6 +288,12 @@ export const AgentCatalogPage: React.FC = () => {
                             View details
                           </DropdownItem>
                           <DropdownItem
+                            key="reconfigure"
+                            onClick={() => handleReconfigureClick(agent)}
+                          >
+                            Reconfigure
+                          </DropdownItem>
+                          <DropdownItem
                             key="delete"
                             onClick={() => handleDeleteClick(agent)}
                             isDanger
@@ -350,6 +360,26 @@ export const AgentCatalogPage: React.FC = () => {
           onChange={(_e, value) => setDeleteConfirmText(value)}
           aria-label="Confirm agent name"
           style={{ marginTop: '8px' }}
+        />
+      </Modal>
+
+      {/* Reconfigure Modal */}
+      <Modal
+        variant={ModalVariant.large}
+        title={`Reconfigure ${agentToReconfigure?.name}`}
+        isOpen={reconfigureModalOpen}
+        onClose={() => setReconfigureModalOpen(false)}
+        showClose
+      >
+        <SandboxWizard
+          mode="reconfigure"
+          agentName={agentToReconfigure?.name}
+          namespace={agentToReconfigure?.namespace || namespace}
+          onClose={() => setReconfigureModalOpen(false)}
+          onSuccess={() => {
+            setReconfigureModalOpen(false);
+            queryClient.invalidateQueries({ queryKey: ['agents', namespace] });
+          }}
         />
       </Modal>
     </>

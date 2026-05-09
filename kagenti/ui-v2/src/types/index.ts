@@ -6,7 +6,7 @@
  */
 
 // Workload types for agent deployment
-export type WorkloadType = 'deployment' | 'statefulset' | 'job';
+export type WorkloadType = 'deployment' | 'statefulset' | 'job' | 'sandbox';
 
 // Agent types
 export interface AgentLabels {
@@ -307,4 +307,220 @@ export interface User {
   username: string;
   email?: string;
   roles?: string[];
+}
+
+// Integration types
+export type IntegrationProvider = 'github' | 'gitlab' | 'bitbucket';
+
+export type IntegrationStatus = 'Connected' | 'Error' | 'Pending';
+
+export interface IntegrationWebhook {
+  name: string;
+  events: string[];
+  filters?: {
+    branches?: string[];
+    actions?: string[];
+  };
+}
+
+export interface IntegrationSchedule {
+  name: string;
+  cron: string;
+  skill: string;
+  agent: string;
+  enabled?: boolean;
+}
+
+export interface IntegrationAlert {
+  name: string;
+  source: 'prometheus' | 'pagerduty';
+  matchLabels: Record<string, string>;
+  agent: string;
+}
+
+export interface IntegrationAgentRef {
+  name: string;
+  namespace: string;
+}
+
+export interface Integration {
+  name: string;
+  namespace: string;
+  repository: {
+    url: string;
+    provider: IntegrationProvider;
+    branch: string;
+    credentialsSecret?: string;
+  };
+  agents: IntegrationAgentRef[];
+  webhooks: IntegrationWebhook[];
+  schedules: IntegrationSchedule[];
+  alerts: IntegrationAlert[];
+  status: IntegrationStatus;
+  webhookUrl?: string;
+  lastWebhookEvent?: string;
+  lastScheduleRun?: string;
+  createdAt?: string;
+}
+
+export interface IntegrationDetail extends Integration {
+  conditions?: Array<{
+    type: string;
+    status: string;
+    lastTransitionTime?: string;
+    message?: string;
+  }>;
+}
+
+// File browser types
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  modified?: string;
+}
+
+export interface FileContent {
+  path: string;
+  content: string;
+  size: number;
+  modified: string;
+}
+
+// Pod storage / mount stats
+export interface MountInfo {
+  filesystem: string;
+  size: string;
+  used: string;
+  available: string;
+  use_percent: string;
+  mount_point: string;
+}
+
+export interface PodStorageStats {
+  mounts: MountInfo[];
+  total_mounts: number;
+}
+
+// Skill types
+export interface SkillLabels {
+  category?: string;
+  type?: string;
+}
+
+export interface Skill {
+  name: string;
+  namespace: string;
+  resourceName: string;
+  description: string;
+  status: string;
+  labels: SkillLabels;
+  createdAt?: string;
+  origin?: string;
+  usageCount: number;
+}
+
+export interface SkillFile {
+  name: string;
+  path: string;
+  content: string;
+  size: number;
+}
+
+export interface SkillDetail extends Skill {
+  dataKeys: string[];
+  annotations: Record<string, string>;
+  files: SkillFile[];
+}
+
+export interface CreateSkillRequest {
+  name: string;
+  namespace: string;
+  description?: string;
+  category?: string;
+  url?: string;
+  files?: Record<string, string>;
+}
+
+export interface CreateSkillResponse {
+  success: boolean;
+  name: string;
+  namespace: string;
+  message: string;
+}
+
+// AuthBridge types
+export interface AuthBridgeConfig {
+  AuthBridge: boolean | null
+  mode: string | null;
+  inbound: InboundConfig | null;
+  outbound: OutboundConfig | null;
+  identity: IdentityConfig | null;
+  listener: ListenerConfig | null;
+  bypass:   BypassConfig | null;
+  routes:   RoutesConfig | null;
+  stats:    StatsConfig | null;
+}
+
+export interface InboundConfig {
+  jwks_url: string;
+  issuer:  string;
+}
+
+export interface OutboundConfig {
+  token_url:      string;
+  keycloak_url:   string;
+  keycloak_realm: string;
+  default_policy: string;
+}
+
+export interface IdentityConfig {
+  type:             string; // "spiffe", "client-secret", "k8s-sa"
+  client_id:         string;
+  client_secret:     string;
+  client_id_file:     string;
+  client_secret_file: string;
+  socket_path:       string;
+  jwt_svid_path:      string;
+  jwt_audience:      string[];
+}
+
+export interface ListenerConfig {
+  ext_proc_addr:         string;
+  ext_authz_addr:        string;
+  forward_proxy_addr:    string;
+  reverse_proxy_addr:    string;
+  reverse_proxy_backend: string;
+}
+
+export interface BypassConfig {
+  inbound_paths: string[];
+}
+
+export interface RoutesConfig {
+  file:  string; // path to routes YAML file
+  rules: RouteConfig[]
+}
+
+export interface RouteConfig {
+  host:           string;
+  target_audience: string;
+  token_scopes:    string;
+  token_url:       string;
+  passthrough:    boolean;
+  action:         string;
+}
+
+export interface StatsConfig {
+  address: string; // for example, ":9093"
+}
+
+export interface AuthBridgeStats {
+  AuthBridge: boolean | null;
+  inbound_approvals: Record<string, number> | null;
+  inbound_denials: Record<string, number> | null;
+  outbound_approvals: Record<string, number> | null;
+  outbound_denials: Record<string, number> | null;
+  outbound_replace_tokens: Record<string, number> | null;
 }

@@ -29,6 +29,14 @@ spec:
         protocol.kagenti.io/a2a: ""
         kagenti.io/framework: LangGraph
         app.kubernetes.io/name: weather-service
+        # Opt this E2E agent into the legacy client-registration sidecar
+        # (rather than the default operator-managed registration). The
+        # legacy path creates the Keycloak client + agent-*-aud scope
+        # synchronously at pod startup, so the test fixture's scope poll
+        # reliably finds it. The operator-managed reconciler has been
+        # observed stuck on HyperShift CI; see fix/e2e-audience-scope-gate.
+        # Remove this label once the operator-managed path is reliable.
+        kagenti.io/client-registration-inject: "true"
     spec:
       serviceAccountName: weather-service
       containers:
@@ -49,7 +57,7 @@ spec:
         - name: MCP_URL
           value: "http://weather-tool-mcp.team1.svc.cluster.local:8000/mcp"
         - name: LLM_API_BASE
-          value: "https://llama-4-scout-17b-16e-w4a16-maas-apicast-production.apps.prod.rhoai.rh-aiservices-bu.com:443/v1"
+          value: "https://litellm-prod.apps.maas.redhatworkshops.io/v1"
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
@@ -61,7 +69,7 @@ spec:
               name: openai-secret
               key: apikey
         - name: LLM_MODEL
-          value: "llama-4-scout-17b-16e-w4a16"
+          value: "llama-scout-17b"
         - name: GITHUB_SECRET_NAME
           value: "github-token-secret"
         ports:

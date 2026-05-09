@@ -15,7 +15,7 @@ import {
   Label,
   ExpandableSection,
 } from '@patternfly/react-core';
-import { PaperPlaneIcon } from '@patternfly/react-icons';
+import { PaperPlaneIcon, TimesCircleIcon } from '@patternfly/react-icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
 
 import { chatService } from '@/services/api';
@@ -63,6 +63,7 @@ const markdownComponents = {
   strong: ({ children }: any) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
 };
 
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -70,6 +71,7 @@ interface Message {
   timestamp: Date;
   events?: A2AEvent[];
   isComplete?: boolean;
+  username?: string;
 }
 
 interface AgentChatProps {
@@ -86,7 +88,9 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
   const [streamingEvents, setStreamingEvents] = useState<A2AEvent[]>([]);
   const [showAgentCard, setShowAgentCard] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { getToken } = useAuth();
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const { getToken, forceRefreshToken, user } = useAuth();
+  const currentUsername = user?.username || 'you';
 
   // Fetch agent card to check capabilities
   const { data: agentCard, isLoading: isLoadingCard, error: cardError } = useQuery({
@@ -107,6 +111,7 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
           content: response.content,
           timestamp: new Date(),
           isComplete: true,
+          username: name, // agent name as assistant username
         },
       ]);
     },
@@ -126,6 +131,7 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
       content: input.trim(),
       timestamp: new Date(),
       isComplete: true,
+      username: currentUsername,
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -141,7 +147,7 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
 
       try {
         // Get auth token if available
-        const token = await getToken();
+        let token = await getToken();
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -149,17 +155,36 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
           headers['Authorization'] = `Bearer ${token}`;
         }
 
-        const response = await fetch(
-          `/api/v1/chat/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/stream`,
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              message: messageToSend,
-              session_id: sessionId,
-            }),
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
+        const streamUrl = `/api/v1/chat/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/stream`;
+        const streamBody = JSON.stringify({
+          message: messageToSend,
+          session_id: sessionId,
+        });
+
+        let response = await fetch(streamUrl, {
+          method: 'POST',
+          headers,
+          body: streamBody,
+          signal: controller.signal,
+        });
+
+        // On 401, force-refresh token and retry once (scope may have been added after login)
+        if (response.status === 401) {
+          await response.body?.cancel();
+          token = await forceRefreshToken();
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+            response = await fetch(streamUrl, {
+              method: 'POST',
+              headers,
+              body: streamBody,
+              signal: controller.signal,
+            });
           }
-        );
+        }
 
         if (!response.ok) {
           throw new Error(`HTTP error: ${response.status}`);
@@ -188,15 +213,12 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6));
-                  console.log('[AgentChat] Received SSE data:', data);
-
                   if (data.session_id) {
                     setSessionId(data.session_id);
                   }
 
                   // Process event if present
                   if (data.event) {
-                    console.log('[AgentChat] Processing event:', data.event);
                     const event: A2AEvent = {
                       id: `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                       timestamp: new Date(),
@@ -216,10 +238,7 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
                     }
 
                     collectedEvents.push(event);
-                    console.log('[AgentChat] Added event to collection, total events:', collectedEvents.length, event);
                     setStreamingEvents([...collectedEvents]);
-                  } else {
-                    console.log('[AgentChat] No event field in data, skipping event creation');
                   }
 
                   // Accumulate content (for final message)
@@ -274,17 +293,32 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
           ]);
         }
       } catch (error) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
-            timestamp: new Date(),
-            isComplete: true,
-          },
-        ]);
+        // Don't show error for user-initiated cancellation
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${Date.now()}`,
+              role: 'assistant',
+              content: '*Request cancelled by user.*',
+              timestamp: new Date(),
+              isComplete: true,
+            },
+          ]);
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${Date.now()}`,
+              role: 'assistant',
+              content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
+              timestamp: new Date(),
+              isComplete: true,
+            },
+          ]);
+        }
       } finally {
+        abortControllerRef.current = null;
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingEvents([]);
@@ -295,10 +329,43 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
     }
   };
 
+  const handleHitlResponse = async (_taskId: string, action: 'approve' | 'deny') => {
+    try {
+      let token = await getToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const message = action === 'approve' ? 'Approved' : 'Denied';
+      const hitlUrl = `/api/v1/chat/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/stream`;
+      const hitlBody = JSON.stringify({ message, session_id: sessionId });
+
+      let response = await fetch(hitlUrl, { method: 'POST', headers, body: hitlBody });
+
+      if (response.status === 401) {
+        await response.body?.cancel();
+        token = await forceRefreshToken();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+          response = await fetch(hitlUrl, { method: 'POST', headers, body: hitlBody });
+        }
+      }
+    } catch (error) {
+      console.error(`[AgentChat] Failed to send HITL ${action}:`, error);
+    }
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+    }
+  };
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
   };
 
@@ -427,6 +494,24 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
                     alignItems: message.role === 'user' ? 'flex-end' : 'flex-start',
                   }}
                 >
+                  {/* Username label */}
+                  {message.username && (
+                    <div
+                      data-testid={`message-username-${message.id}`}
+                      style={{
+                        fontSize: '0.75em',
+                        fontWeight: 600,
+                        color: 'var(--pf-v5-global--Color--200)',
+                        marginBottom: '2px',
+                        paddingLeft: message.role === 'user' ? undefined : '4px',
+                        paddingRight: message.role === 'user' ? '4px' : undefined,
+                      }}
+                    >
+                      {message.username === currentUsername
+                        ? `${message.username} (you)`
+                        : message.username}
+                    </div>
+                  )}
                   <div
                     style={{
                       maxWidth: '80%',
@@ -448,6 +533,8 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
                         events={message.events}
                         isComplete={message.isComplete ?? true}
                         defaultExpanded={false}
+                        onHitlApprove={(taskId) => handleHitlResponse(taskId, 'approve')}
+                        onHitlDeny={(taskId) => handleHitlResponse(taskId, 'deny')}
                       />
                     )}
                     {message.role === 'assistant' ? (
@@ -496,6 +583,8 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
                         events={streamingEvents}
                         isComplete={false}
                         defaultExpanded={true}
+                        onHitlApprove={(taskId) => handleHitlResponse(taskId, 'approve')}
+                        onHitlDeny={(taskId) => handleHitlResponse(taskId, 'deny')}
                       />
                     )}
                     {streamingContent ? (
@@ -558,16 +647,27 @@ export const AgentChat: React.FC<AgentChatProps> = ({ namespace, name }) => {
             />
           </SplitItem>
           <SplitItem>
-            <Button
-              variant="primary"
-              onClick={handleSendMessage}
-              isDisabled={!input.trim() || isStreaming || sendMessageMutation.isPending}
-              isLoading={isStreaming || sendMessageMutation.isPending}
-              icon={<PaperPlaneIcon />}
-              style={{ height: '100%' }}
-            >
-              Send
-            </Button>
+            {isStreaming ? (
+              <Button
+                variant="danger"
+                onClick={handleCancel}
+                icon={<TimesCircleIcon />}
+                style={{ height: '100%' }}
+              >
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                onClick={handleSendMessage}
+                isDisabled={!input.trim() || sendMessageMutation.isPending}
+                isLoading={sendMessageMutation.isPending}
+                icon={<PaperPlaneIcon />}
+                style={{ height: '100%' }}
+              >
+                Send
+              </Button>
+            )}
           </SplitItem>
         </Split>
 

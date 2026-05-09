@@ -2,26 +2,30 @@
 # Licensed under the Apache License, Version 2.0
 
 # Stage 1: Build the React application
-FROM node:25-alpine@sha256:5209bcaca9836eb3448b650396213dbe9d9a34d31840c2ae1f206cb2986a8543 AS builder
+FROM node:26-slim@sha256:ccd1c33b2876c07564b3fae7f6a5815aa42f71163faf07d00a9907e398d48bdc AS builder
 
 WORKDIR /app
 
 # Copy package files
-COPY ui-v2/package.json ./
-# Note: If using npm, use package-lock.json instead
-# COPY package-lock.json ./
+COPY ui-v2/package.json ui-v2/package-lock.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (locked via package-lock.json)
+# Rollup needs the explicit glibc binary in slim/Debian (not auto-resolved like in alpine)
+# hadolint ignore=DL3016
+RUN npm ci --legacy-peer-deps && \
+    npm install @rollup/rollup-linux-x64-gnu --save-optional
 
 # Copy source code
 COPY ui-v2/ .
+
+ARG RELEASE_TAG=unknown
+RUN sed -i -r 's/^\ \ "version": (.*)/  "version": "'${RELEASE_TAG}'",/' package.json
 
 # Build the application
 RUN npm run build
 
 # Stage 2: Serve with nginx
-FROM nginx:1.29-alpine@sha256:f46cb72c7df02710e693e863a983ac42f6a9579058a59a35f1ae36c9958e4ce0
+FROM nginx:1.29-alpine@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d
 
 # Copy nginx configuration
 COPY ui-v2/nginx.conf /etc/nginx/conf.d/default.conf

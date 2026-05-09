@@ -3,9 +3,9 @@
 
 import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { copyToClipboard } from '../utils/clipboard';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { workloadTypeColor, WORKLOAD_META } from '@/utils/workloadType';
 import {
   PageSection,
   Title,
@@ -32,7 +32,6 @@ import {
   Alert,
   Grid,
   GridItem,
-  ClipboardCopy,
   Split,
   SplitItem,
   Flex,
@@ -69,8 +68,9 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import yaml from 'js-yaml';
 
-import { agentService, chatService, configService, shipwrightService, ShipwrightBuildInfo } from '@/services/api';
+import { agentService, authBridgeService, chatService, configService, shipwrightService, ShipwrightBuildInfo } from '@/services/api';
 import { AgentChat } from '@/components/AgentChat';
+import { useFeatureFlags } from '@/hooks/useFeatureFlags';
 
 interface StatusCondition {
   type: string;
@@ -108,6 +108,7 @@ export const AgentDetailPage: React.FC = () => {
   const { namespace, name } = useParams<{ namespace: string; name: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const features = useFeatureFlags();
   const [activeTab, setActiveTab] = React.useState<string | number>(0);
   const [isAgentCardExpanded, setIsAgentCardExpanded] = React.useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = React.useState(false);
@@ -208,6 +209,22 @@ export const AgentDetailPage: React.FC = () => {
     queryFn: () => configService.getDashboards(),
   });
 
+  // Fetch AuthBridge config and status
+  // AuthBridge queries are suppressed until the agent is loaded and confirmed to have the sidecar
+  const hasAuthBridge = agent?.metadata?.labels?.['kagenti.io/inject'] === 'enabled';
+
+  const { data: authBridgeConfig, isLoading: isAuthBridgeConfigLoading } = useQuery({
+    queryKey: ['authbridge-config', namespace, name],
+    queryFn: () => authBridgeService.getConfig(namespace!, name!),
+    enabled: !!namespace && !!name && hasAuthBridge && features.authbridgeAPI,
+  });
+
+  const { data: authBridgeStats, isLoading: isAuthBridgeStatsLoading } = useQuery({
+    queryKey: ['authbridge-status', namespace, name],
+    queryFn: () => authBridgeService.getStatus(namespace!, name!),
+    enabled: !!namespace && !!name && hasAuthBridge && features.authbridgeAPI,
+  });
+
   if (isLoading) {
     return (
       <PageSection>
@@ -302,13 +319,14 @@ export const AgentDetailPage: React.FC = () => {
   // If route check fails or is loading, default to false (in-cluster URL is safer default)
   const hasRoute = routeStatusData?.hasRoute ?? false;
 
-  // Determine the appropriate URL based on route existence
-  // External URL: http://{name}.{namespace}.{domainName}:8080 (via HTTPRoute)
-  // In-cluster URL: http://{name}.{namespace}.svc.cluster.local:8000
+  // Prefer the real URL from the agent card or derive from the actual Service port.
+  // Fall back to convention defaults (8080 external, 8000 in-cluster) when neither is available.
+  const servicePort = serviceInfo?.ports?.[0]?.port;
   const domainName = dashboardConfig?.domainName || 'localtest.me';
-  const agentUrl = hasRoute
-    ? `http://${name}.${namespace}.${domainName}:8080`
-    : `http://${name}.${namespace}.svc.cluster.local:8000`;
+  const agentUrl = agentCard?.url
+    || (hasRoute
+      ? `http://${name}.${namespace}.${domainName}:${servicePort || 8080}`
+      : `http://${name}.${namespace}.svc.cluster.local:${servicePort || 8000}`);
 
   return (
     <>
@@ -425,7 +443,7 @@ export const AgentDetailPage: React.FC = () => {
                       <DescriptionListGroup>
                         <DescriptionListTerm>Workload Type</DescriptionListTerm>
                         <DescriptionListDescription>
-                          <Label color={workloadType === 'job' ? 'orange' : workloadType === 'statefulset' ? 'gold' : 'grey'} isCompact>
+                          <Label color={workloadTypeColor(workloadType)} isCompact>
                             {workloadType.charAt(0).toUpperCase() + workloadType.slice(1)}
                           </Label>
                         </DescriptionListDescription>
@@ -471,9 +489,9 @@ export const AgentDetailPage: React.FC = () => {
                       <DescriptionListGroup>
                         <DescriptionListTerm>Agent URL</DescriptionListTerm>
                         <DescriptionListDescription>
-                          <ClipboardCopy isReadOnly hoverTip="Copy" clickTip="Copied" onCopy={copyToClipboard}>
+                          <a href={agentUrl} target="_blank" rel="noopener noreferrer">
                             {agentUrl}
-                          </ClipboardCopy>
+                          </a>
                         </DescriptionListDescription>
                       </DescriptionListGroup>
                       {serviceInfo && (
@@ -567,12 +585,6 @@ export const AgentDetailPage: React.FC = () => {
                                         </DescriptionListDescription>
                                       </DescriptionListGroup>
                                     )}
-                                    <DescriptionListGroup>
-                                      <DescriptionListTerm>URL</DescriptionListTerm>
-                                      <DescriptionListDescription>
-                                        <code style={{ fontSize: '0.85em' }}>{agentCard.url}</code>
-                                      </DescriptionListDescription>
-                                    </DescriptionListGroup>
                                   </DescriptionList>
                                 </CardBody>
                               </Card>
@@ -856,9 +868,9 @@ export const AgentDetailPage: React.FC = () => {
                             <DescriptionListGroup>
                               <DescriptionListTerm>Git URL</DescriptionListTerm>
                               <DescriptionListDescription>
-                                <code style={{ fontSize: '0.85em' }}>
+                                <a href={shipwrightBuildStatus.gitUrl} target="_blank" rel="noopener noreferrer">
                                   {shipwrightBuildStatus.gitUrl}
-                                </code>
+                                </a>
                               </DescriptionListDescription>
                             </DescriptionListGroup>
                             <DescriptionListGroup>
@@ -996,8 +1008,8 @@ export const AgentDetailPage: React.FC = () => {
                 >
                   {yaml.dump(
                     {
-                      apiVersion: agent.workloadType === 'statefulset' ? 'apps/v1' : agent.workloadType === 'job' ? 'batch/v1' : 'apps/v1',
-                      kind: agent.workloadType === 'statefulset' ? 'StatefulSet' : agent.workloadType === 'job' ? 'Job' : 'Deployment',
+                      apiVersion: (WORKLOAD_META[agent.workloadType ?? 'deployment'] ?? WORKLOAD_META.deployment).apiVersion,
+                      kind: (WORKLOAD_META[agent.workloadType ?? 'deployment'] ?? WORKLOAD_META.deployment).kind,
                       metadata: {
                         ...agent.metadata,
                         managedFields: undefined,
@@ -1011,6 +1023,222 @@ export const AgentDetailPage: React.FC = () => {
               </CardBody>
             </Card>
           </Tab>
+
+          {hasAuthBridge && features.authbridgeAPI && <Tab eventKey={4} title={<TabTitleText>AuthBridge</TabTitleText>}>
+            <Grid hasGutter style={{ marginTop: '16px' }}>
+              <GridItem md={6}>
+                <Card>
+                  <CardTitle>Config</CardTitle>
+                  <CardBody>
+                    {isAuthBridgeConfigLoading ? (
+                      <Spinner size="md" aria-label="Loading AuthBridge config" />
+                    ) : authBridgeConfig ? (
+                      <DescriptionList isCompact>
+                        {authBridgeConfig.AuthBridge != null && !authBridgeConfig.AuthBridge ? (
+                          <DescriptionListGroup>
+                            <DescriptionListTerm>Enabled</DescriptionListTerm>
+                            <DescriptionListDescription>
+                              <Label color="red" isCompact>No</Label>
+                            </DescriptionListDescription>
+                          </DescriptionListGroup>
+                        ) : (
+                          <>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Mode</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <Label isCompact color="blue">{authBridgeConfig.mode}</Label>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Inbound JWKS URL</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <code style={{ fontSize: '0.85em' }}>{authBridgeConfig.inbound?.jwks_url || '-'}</code>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Inbound Issuer</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {authBridgeConfig.inbound?.issuer || '-'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Outbound Token URL</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <code style={{ fontSize: '0.85em' }}>{authBridgeConfig.outbound?.token_url || '-'}</code>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Outbound Default Policy</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {authBridgeConfig.outbound?.default_policy || '-'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Identity Type</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                <Label isCompact>{authBridgeConfig.identity?.type || '-'}</Label>
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Identity Client ID</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {authBridgeConfig.identity?.client_id || '-'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            <DescriptionListGroup>
+                              <DescriptionListTerm>Bypass Inbound Paths</DescriptionListTerm>
+                              <DescriptionListDescription>
+                                {(authBridgeConfig.bypass?.inbound_paths?.length ?? 0) > 0 ? (
+                                  <LabelGroup>
+                                    {authBridgeConfig.bypass?.inbound_paths?.map((path) => (
+                                      <Label key={path} isCompact>{path}</Label>
+                                    ))}
+                                  </LabelGroup>
+                                ) : '-'}
+                              </DescriptionListDescription>
+                            </DescriptionListGroup>
+                            {(authBridgeConfig.routes?.rules?.length ?? 0) > 0 && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Routes</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  <Table aria-label="AuthBridge routes" variant="compact">
+                                    <Thead>
+                                      <Tr>
+                                        <Th>Host</Th>
+                                        <Th>Action</Th>
+                                        <Th>Target Audience</Th>
+                                        <Th>Passthrough</Th>
+                                      </Tr>
+                                    </Thead>
+                                    <Tbody>
+                                      {authBridgeConfig.routes?.rules?.map((route, idx) => (
+                                        <Tr key={idx}>
+                                          <Td dataLabel="Host">{route.host}</Td>
+                                          <Td dataLabel="Action">{route.action || '-'}</Td>
+                                          <Td dataLabel="Target Audience">{route.target_audience || '-'}</Td>
+                                          <Td dataLabel="Passthrough">
+                                            <Label isCompact color={route.passthrough ? 'green' : 'gold'}>
+                                              {route.passthrough ? 'Yes' : 'No'}
+                                            </Label>
+                                          </Td>
+                                        </Tr>
+                                      ))}
+                                    </Tbody>
+                                  </Table>
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                          </>
+                        )}
+                      </DescriptionList>
+                    ) : (
+                      <EmptyState>
+                        <EmptyStateHeader titleText="No configuration available" headingLevel="h4" />
+                      </EmptyState>
+                    )}
+                  </CardBody>
+                </Card>
+              </GridItem>
+              <GridItem md={6}>
+                <Card>
+                  <CardTitle>Status</CardTitle>
+                  <CardBody>
+                    {isAuthBridgeStatsLoading ? (
+                      <Spinner size="md" aria-label="Loading AuthBridge status" />
+                    ) : authBridgeStats ? (
+                      <DescriptionList isCompact>
+                        {authBridgeStats.AuthBridge != null && !authBridgeStats.AuthBridge ? (
+                          <DescriptionListGroup>
+                            <DescriptionListTerm>Enabled</DescriptionListTerm>
+                            <DescriptionListDescription>
+                              <Label color="red" isCompact>No</Label>
+                            </DescriptionListDescription>
+                          </DescriptionListGroup>
+                        ) : (
+                          <>
+                            {authBridgeStats.inbound_approvals != null && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Inbound Approvals</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  {Object.keys(authBridgeStats.inbound_approvals).length > 0 ? (
+                                    <LabelGroup>
+                                      {Object.entries(authBridgeStats.inbound_approvals).map(([key, val]) => (
+                                        <Label key={key} isCompact color="green">{key}: {val}</Label>
+                                      ))}
+                                    </LabelGroup>
+                                  ) : 'None'}
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                            {authBridgeStats.inbound_denials != null && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Inbound Denials</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  {Object.keys(authBridgeStats.inbound_denials).length > 0 ? (
+                                    <LabelGroup>
+                                      {Object.entries(authBridgeStats.inbound_denials).map(([key, val]) => (
+                                        <Label key={key} isCompact color="red">{key}: {val}</Label>
+                                      ))}
+                                    </LabelGroup>
+                                  ) : 'None'}
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                            {authBridgeStats.outbound_approvals != null && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Outbound Approvals</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  {Object.keys(authBridgeStats.outbound_approvals).length > 0 ? (
+                                    <LabelGroup>
+                                      {Object.entries(authBridgeStats.outbound_approvals).map(([key, val]) => (
+                                        <Label key={key} isCompact color="green">{key}: {val}</Label>
+                                      ))}
+                                    </LabelGroup>
+                                  ) : 'None'}
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                            {authBridgeStats.outbound_denials != null && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Outbound Denials</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  {Object.keys(authBridgeStats.outbound_denials).length > 0 ? (
+                                    <LabelGroup>
+                                      {Object.entries(authBridgeStats.outbound_denials).map(([key, val]) => (
+                                        <Label key={key} isCompact color="red">{key}: {val}</Label>
+                                      ))}
+                                    </LabelGroup>
+                                  ) : 'None'}
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                            {authBridgeStats.outbound_replace_tokens != null && (
+                              <DescriptionListGroup>
+                                <DescriptionListTerm>Outbound Token Replacements</DescriptionListTerm>
+                                <DescriptionListDescription>
+                                  {Object.keys(authBridgeStats.outbound_replace_tokens).length > 0 ? (
+                                    <LabelGroup>
+                                      {Object.entries(authBridgeStats.outbound_replace_tokens).map(([key, val]) => (
+                                        <Label key={key} isCompact color="blue">{key}: {val}</Label>
+                                      ))}
+                                    </LabelGroup>
+                                  ) : 'None'}
+                                </DescriptionListDescription>
+                              </DescriptionListGroup>
+                            )}
+                          </>
+                        )}
+                      </DescriptionList>
+                    ) : (
+                      <EmptyState>
+                        <EmptyStateHeader titleText="No status available" headingLevel="h4" />
+                      </EmptyState>
+                    )}
+                  </CardBody>
+                </Card>
+              </GridItem>
+            </Grid>
+          </Tab>}
         </Tabs>
       </PageSection>
 

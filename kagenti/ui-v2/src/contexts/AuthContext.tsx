@@ -13,6 +13,7 @@ import React, {
 import Keycloak from 'keycloak-js';
 
 import { setTokenGetter, setTokenForceRefresher } from '@/services/api';
+import { setEventServiceTokenGetter } from '@/services/eventService';
 
 import { keycloakRedirectUri } from './keycloakRedirectUri';
 
@@ -46,6 +47,7 @@ export interface AuthContextType {
   login: () => void;
   logout: () => void;
   getToken: () => Promise<string | null>;
+  forceRefreshToken: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -178,7 +180,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           pkceMethod: 'S256',
           enableLogging: true, // Enable Keycloak adapter logging
           flow: 'standard', // Use standard authorization code flow
-          redirectUri,
+          // Do NOT set redirectUri — let Keycloak default to window.location.href
+          // so users return to the page they were on (e.g. /sandbox/files/...).
+          // Setting redirect_uri to "/" causes deep links to redirect to root.
         }).catch((initError) => {
           console.error('Keycloak init rejected with error:', initError);
 
@@ -377,6 +381,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   useEffect(() => {
     setTokenGetter(getToken);
     setTokenForceRefresher(forceRefreshToken);
+    setEventServiceTokenGetter(getToken);
   }, [getToken, forceRefreshToken]);
 
   const value = useMemo(
@@ -390,8 +395,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       login,
       logout,
       getToken,
+      forceRefreshToken,
     }),
-    [isAuthenticated, isLoading, isEnabled, user, token, error, login, logout, getToken]
+    [isAuthenticated, isLoading, isEnabled, user, token, error, login, logout, getToken, forceRefreshToken]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
