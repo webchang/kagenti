@@ -234,7 +234,6 @@ export const agentService = {
     // Per-sidecar injection controls
     envoyProxyInject?: boolean;
     spiffeHelperInject?: boolean;
-    clientRegistrationInject?: boolean;
     outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
     outboundPortsExclude?: string;
     inboundPortsExclude?: string;
@@ -446,11 +445,10 @@ export const shipwrightService = {
       authBridgeEnabled?: boolean;
       envoyProxyInject?: boolean;
       spiffeHelperInject?: boolean;
-      clientRegistrationInject?: boolean;
       outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
-    outboundPortsExclude?: string;
-    inboundPortsExclude?: string;
-    defaultOutboundPolicy?: string;
+      outboundPortsExclude?: string;
+      inboundPortsExclude?: string;
+      defaultOutboundPolicy?: string;
       imagePullSecret?: string;
     }
   ): Promise<{ success: boolean; name: string; namespace: string; message: string }> {
@@ -539,7 +537,6 @@ export const toolService = {
     // Per-sidecar injection controls
     envoyProxyInject?: boolean;
     spiffeHelperInject?: boolean;
-    clientRegistrationInject?: boolean;
     outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
     outboundPortsExclude?: string;
     inboundPortsExclude?: string;
@@ -676,11 +673,10 @@ export const toolShipwrightService = {
       authBridgeEnabled?: boolean;
       envoyProxyInject?: boolean;
       spiffeHelperInject?: boolean;
-      clientRegistrationInject?: boolean;
       outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
-    outboundPortsExclude?: string;
-    inboundPortsExclude?: string;
-    defaultOutboundPolicy?: string;
+      outboundPortsExclude?: string;
+      inboundPortsExclude?: string;
+      defaultOutboundPolicy?: string;
       imagePullSecret?: string;
     }
   ): Promise<{ success: boolean; name: string; namespace: string; message: string }> {
@@ -708,11 +704,34 @@ export interface DashboardConfig {
 }
 
 /**
+ * Platform status types
+ */
+export interface ComponentStatus {
+  name: string;
+  status: 'Ready' | 'Degraded' | 'Missing' | 'Unknown';
+}
+
+export interface RegistryBuildInfo {
+  clusterBuildStrategyPresent: boolean;
+  clusterBuildStrategies: string[];
+  registryEndpoint: string;
+}
+
+export interface PlatformStatusResponse {
+  components: ComponentStatus[];
+  registry: RegistryBuildInfo;
+}
+
+/**
  * Config service
  */
 export const configService = {
   async getDashboards(): Promise<DashboardConfig> {
     return apiFetch('/config/dashboards');
+  },
+
+  async getPlatformStatus(): Promise<PlatformStatusResponse> {
+    return apiFetch('/config/platform-status');
   },
 };
 

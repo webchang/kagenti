@@ -2024,6 +2024,8 @@ def _build_authbridge_runtime_yaml(
     # public `issuer`. Required for split-horizon deployments where
     # `issuer` isn't reachable from inside the pod. See
     # kagenti-extensions#383.
+    # Note: Remember to keep AuthBridgeConfig in kagenti/ui-v2/src/types/index.ts
+    # in sync with this YAML runtime configuration.
     config = {
         "mode": "envoy-sidecar",
         "pipeline": {
@@ -2412,8 +2414,6 @@ def _build_common_labels(
         labels[KAGENTI_ENVOY_PROXY_INJECT_LABEL] = "false"
     if request.spiffeHelperInject is False:
         labels[KAGENTI_SPIFFE_HELPER_INJECT_LABEL] = "false"
-    if request.clientRegistrationInject is True:
-        labels[KAGENTI_CLIENT_REGISTRATION_INJECT_LABEL] = "true"
     return labels
 
 
@@ -2610,7 +2610,7 @@ def _build_service_manifest(request: "CreateAgentRequest") -> dict:
     Returns:
         Service manifest dictionary.
     """
-    labels = _build_common_labels(request, WORKLOAD_TYPE_DEPLOYMENT)
+    labels = _build_common_labels(request, request.workloadType)
     selector_labels = _build_selector_labels(request)
 
     # Build service ports
@@ -2861,18 +2861,7 @@ def _build_sandbox_manifest(
     shipwright_build_name: Optional[str] = None,
 ) -> dict:
     """Build a Sandbox manifest (agents.x-k8s.io/v1alpha1) for direct creation."""
-    # Sandbox controller creates a headless Service with no port translation,
-    # so the container must listen on the same port clients connect to (the
-    # external service port, which is also baked into AGENT_ENDPOINT). For
-    # other workload types the Service port-translates to targetPort, so the
-    # split is fine there.
-    service_port = (
-        request.servicePorts[0].port if request.servicePorts else DEFAULT_OFF_CLUSTER_PORT
-    )
-    env_vars = [
-        {"name": "PORT", "value": str(service_port)} if ev.get("name") == "PORT" else ev
-        for ev in _build_env_vars(request)
-    ]
+    env_vars = _build_env_vars(request)
     labels = _build_common_labels(request, WORKLOAD_TYPE_SANDBOX)
 
     annotations: Dict[str, str] = {
@@ -2881,7 +2870,9 @@ def _build_sandbox_manifest(
     if shipwright_build_name:
         annotations["kagenti.io/shipwright-build"] = shipwright_build_name
 
-    container_port = service_port
+    container_port = DEFAULT_IN_CLUSTER_PORT
+    if request.servicePorts and len(request.servicePorts) > 0:
+        container_port = request.servicePorts[0].targetPort
 
     manifest = {
         "apiVersion": f"{AGENT_SANDBOX_CRD_GROUP}/{AGENT_SANDBOX_CRD_VERSION}",
@@ -3072,14 +3063,30 @@ async def create_agent(
                 )
                 logger.info(f"Created Sandbox '{request.name}' in namespace '{request.namespace}'")
 
-            # Create Service (not needed for Jobs or Sandboxes)
-            if request.workloadType not in (WORKLOAD_TYPE_JOB, WORKLOAD_TYPE_SANDBOX):
+            # Create Service (not needed for Jobs — Sandbox uses backend-managed Service)
+            if request.workloadType != WORKLOAD_TYPE_JOB:
                 service_manifest = _build_service_manifest(request)
-                kube.create_service(
-                    namespace=request.namespace,
-                    body=service_manifest,
-                )
-                logger.info(f"Created Service '{request.name}' in namespace '{request.namespace}'")
+                try:
+                    kube.create_service(
+                        namespace=request.namespace,
+                        body=service_manifest,
+                    )
+                    logger.info(
+                        f"Created Service '{request.name}' in namespace '{request.namespace}'"
+                    )
+                except ApiException as e:
+                    if e.status == 409 and request.workloadType == WORKLOAD_TYPE_SANDBOX:
+                        logger.warning(
+                            f"Service '{request.name}' already exists (Sandbox controller race); "
+                            f"replacing with backend-managed ClusterIP Service"
+                        )
+                        kube.delete_service(namespace=request.namespace, name=request.name)
+                        kube.create_service(namespace=request.namespace, body=service_manifest)
+                        logger.info(
+                            f"Replaced Service '{request.name}' in namespace '{request.namespace}'"
+                        )
+                    else:
+                        raise
 
             # Create AgentRuntime CR so the webhook injects sidecars on pod rollout
             if request.workloadType not in (WORKLOAD_TYPE_JOB, WORKLOAD_TYPE_SANDBOX):
