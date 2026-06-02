@@ -107,8 +107,8 @@ async def get_dashboard_config() -> DashboardConfigResponse:
         traces=settings.traces_dashboard_url,
         network=settings.network_dashboard_url or f"http://kiali.{domain}:8080",
         mlflow=settings.mlflow_dashboard_url,
-        mcpInspector=settings.mcp_inspector_url or f"http://mcp-inspector.{domain}:8080",
-        mcpProxy=settings.mcp_proxy_full_address or f"http://mcp-proxy.{domain}:8080",
+        mcpInspector=settings.mcp_inspector_url or None,
+        mcpProxy=settings.mcp_proxy_full_address or None,
         keycloakConsole=(
             settings.keycloak_console_url
             or f"{settings.effective_keycloak_url}/admin/{settings.effective_keycloak_realm}/console/"
@@ -230,3 +230,23 @@ async def get_platform_status(
     )
 
     return PlatformStatusResponse(components=components, registry=registry)
+
+
+class MCPGatewayStatusResponse(BaseModel):
+    """Status of the MCP Gateway component."""
+
+    status: Literal["Ready", "Degraded", "Missing"]
+
+
+@router.get(
+    "/mcp-gateway-status",
+    response_model=MCPGatewayStatusResponse,
+    dependencies=[Depends(require_roles(ROLE_VIEWER))],
+)
+async def get_mcp_gateway_status(
+    kube: KubernetesService = Depends(get_kubernetes_service),
+) -> MCPGatewayStatusResponse:
+    """Return the health status of the MCP Gateway deployment."""
+    # TODO: parameterize namespace/deployment if install location ever varies
+    status = _check_deployment_ready(kube, "gateway-system", "mcp-gateway-istio")
+    return MCPGatewayStatusResponse(status=status)

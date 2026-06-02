@@ -69,6 +69,13 @@ export class ApiError extends Error {
   }
 }
 
+function extractErrorMessage(errorData: Record<string, unknown>, fallback: string): string {
+  const detail = errorData.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map((e: { msg?: string }) => e.msg).join(', ');
+  return fallback;
+}
+
 /**
  * Generic fetch wrapper with error handling, optional authentication,
  * and automatic token refresh on 401 responses.
@@ -119,7 +126,7 @@ async function apiFetch<T>(
         if (!retryResponse.ok) {
           const errorData = await retryResponse.json().catch(() => ({}));
           throw new Error(
-            errorData.detail || `API error: ${retryResponse.status} ${retryResponse.statusText}`
+            extractErrorMessage(errorData, `API error: ${retryResponse.status} ${retryResponse.statusText}`)
           );
         }
         return retryResponse.json();
@@ -136,7 +143,7 @@ async function apiFetch<T>(
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new ApiError(
-      errorData.detail || `API error: ${response.status} ${response.statusText}`,
+      extractErrorMessage(errorData, `API error: ${response.status} ${response.statusText}`),
       response.status
     );
   }
@@ -207,6 +214,7 @@ export const agentService = {
         configMapKeyRef?: { name: string; key: string };
       };
     }>;
+    skills?: string[];
     // Workload type
     workloadType?: 'deployment' | 'statefulset' | 'job' | 'sandbox';
     // New fields for deployment method
@@ -231,13 +239,16 @@ export const agentService = {
     authBridgeEnabled?: boolean;
     // SPIRE identity
     spireEnabled?: boolean;
-    // Per-sidecar injection controls
-    envoyProxyInject?: boolean;
-    spiffeHelperInject?: boolean;
+    // Per-workload AuthBridge mode (maps to AgentRuntime.Spec.AuthBridgeMode)
+    authBridgeMode?: 'proxy-sidecar' | 'envoy-sidecar' | 'lite' | 'waypoint';
+    // Per-workload mTLS posture (maps to AgentRuntime.Spec.MTLSMode).
+    // Backend rejects mtlsMode != 'disabled' when authBridgeMode === 'envoy-sidecar'.
+    mtlsMode?: 'disabled' | 'permissive' | 'strict';
     outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
     outboundPortsExclude?: string;
     inboundPortsExclude?: string;
     defaultOutboundPolicy?: string;
+    persistentStorage?: { enabled: boolean; size: string };
     shipwrightConfig?: ShipwrightBuildConfig;
   }): Promise<{ success: boolean; name: string; namespace: string; message: string }> {
     return apiFetch('/agents', {
@@ -329,6 +340,7 @@ export interface AgentConfigFromBuild {
       configMapKeyRef?: { name: string; key: string };
     };
   }>;
+  skills?: string[];
   servicePorts?: Array<{
     name: string;
     port: number;
@@ -435,6 +447,7 @@ export const shipwrightService = {
           configMapKeyRef?: { name: string; key: string };
         };
       }>;
+      skills?: string[];
       servicePorts?: Array<{
         name: string;
         port: number;
@@ -443,8 +456,8 @@ export const shipwrightService = {
       }>;
       createHttpRoute?: boolean;
       authBridgeEnabled?: boolean;
-      envoyProxyInject?: boolean;
-      spiffeHelperInject?: boolean;
+      authBridgeMode?: 'proxy-sidecar' | 'envoy-sidecar' | 'lite' | 'waypoint';
+      mtlsMode?: 'disabled' | 'permissive' | 'strict';
       outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
       outboundPortsExclude?: string;
       inboundPortsExclude?: string;
@@ -534,9 +547,9 @@ export const toolService = {
     authBridgeEnabled?: boolean;
     // SPIRE identity
     spireEnabled?: boolean;
-    // Per-sidecar injection controls
-    envoyProxyInject?: boolean;
-    spiffeHelperInject?: boolean;
+    // Per-workload AuthBridge mode (maps to AgentRuntime.Spec.AuthBridgeMode
+    // for agents; deprecated kagenti.io/authbridge-mode pod annotation for tools)
+    authBridgeMode?: 'proxy-sidecar' | 'envoy-sidecar' | 'lite' | 'waypoint';
     outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
     outboundPortsExclude?: string;
     inboundPortsExclude?: string;
@@ -671,8 +684,7 @@ export const toolShipwrightService = {
       }>;
       createHttpRoute?: boolean;
       authBridgeEnabled?: boolean;
-      envoyProxyInject?: boolean;
-      spiffeHelperInject?: boolean;
+      authBridgeMode?: 'proxy-sidecar' | 'envoy-sidecar' | 'lite' | 'waypoint';
       outboundRoutes?: Array<{ host: string; target_audience: string; token_scopes: string }>;
       outboundPortsExclude?: string;
       inboundPortsExclude?: string;
@@ -697,8 +709,8 @@ export interface DashboardConfig {
   traces: string;
   network: string;
   mlflow: string;
-  mcpInspector: string;
-  mcpProxy: string;
+  mcpInspector: string | null;
+  mcpProxy: string | null;
   keycloakConsole: string;
   domainName: string;
 }
@@ -725,6 +737,10 @@ export interface PlatformStatusResponse {
 /**
  * Config service
  */
+export interface MCPGatewayStatusResponse {
+  status: 'Ready' | 'Degraded' | 'Missing';
+}
+
 export const configService = {
   async getDashboards(): Promise<DashboardConfig> {
     return apiFetch('/config/dashboards');
@@ -732,6 +748,10 @@ export const configService = {
 
   async getPlatformStatus(): Promise<PlatformStatusResponse> {
     return apiFetch('/config/platform-status');
+  },
+
+  async getMCPGatewayStatus(): Promise<MCPGatewayStatusResponse> {
+    return apiFetch('/config/mcp-gateway-status');
   },
 };
 

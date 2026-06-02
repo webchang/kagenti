@@ -56,6 +56,11 @@ spec:
       app.kubernetes.io/name: kagenti-backend
   template:
     metadata:
+      annotations:
+        # Force pod restart whenever the in-chart ConfigMap or OAuth-secret inputs change.
+        # See https://helm.sh/docs/howto/charts_tips_and_tricks/#automatically-roll-deployments
+        checksum/config: {{ printf "%s|%s|%s|%s|%s|%t|%t" .Values.ui.domainName .Values.ui.api.hostname .Values.ui.namespace .Values.ui.configmap .Values.keycloak.realm .Values.components.phoenix.enabled .Values.components.mlflow.enabled | sha256sum }}
+        checksum/oauth-config: {{ printf "%s|%s|%s|%s" .Values.keycloak.url .Values.keycloak.publicUrl .Values.keycloak.realm .Values.ui.namespace | sha256sum }}
       labels:
         app.kubernetes.io/name: kagenti-backend
         app.kubernetes.io/component: backend
@@ -122,6 +127,10 @@ spec:
             {{- if .Values.ui.backend.defaultRegistryUrl }}
             - name: DEFAULT_REGISTRY_URL
               value: {{ .Values.ui.backend.defaultRegistryUrl | quote }}
+            {{- end }}
+            {{- if .Values.ui.backend.shipwrightDefaultStrategy }}
+            - name: SHIPWRIGHT_DEFAULT_STRATEGY
+              value: {{ .Values.ui.backend.shipwrightDefaultStrategy | quote }}
             {{- end }}
             # Feature flags
             - name: KAGENTI_FEATURE_FLAG_SANDBOX
@@ -296,6 +305,11 @@ spec:
       app.kubernetes.io/name: kagenti-ui
   template:
     metadata:
+      annotations:
+        # Force pod restart whenever the in-chart ConfigMap or OAuth-secret inputs change.
+        # See https://helm.sh/docs/howto/charts_tips_and_tricks/#automatically-roll-deployments
+        checksum/config: {{ printf "%s|%s|%s|%s|%s|%t|%t" .Values.ui.domainName .Values.ui.api.hostname .Values.ui.namespace .Values.ui.configmap .Values.keycloak.realm .Values.components.phoenix.enabled .Values.components.mlflow.enabled | sha256sum }}
+        checksum/oauth-config: {{ printf "%s|%s|%s|%s" .Values.keycloak.url .Values.keycloak.publicUrl .Values.keycloak.realm .Values.ui.namespace | sha256sum }}
       labels:
         app.kubernetes.io/name: kagenti-ui
         app.kubernetes.io/component: frontend
@@ -389,10 +403,16 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
   # ConfigMaps: list/get for reads; create/update/patch for AuthBridge finalize
-  # (authbridge-config, envoy-config, spiffe-helper-config, authproxy-routes merge)
+  # (authbridge-config, envoy-config, spiffe-helper-config, authproxy-routes merge).
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "create", "update", "patch"]
+  {{- if .Values.featureFlags.skills }}
+  # Skills-specific: delete required for skill deletion via the Skills API.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["delete"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list"]

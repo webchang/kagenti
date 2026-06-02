@@ -106,10 +106,6 @@ curl http://spire-oidc.localtest.me:8080/keys
 #### 2. Tornjak Management Interface
 
 ```bash
-# Test Tornjak API
-curl http://spire-tornjak-api.localtest.me:8080/
-# Expected: "Welcome to the Tornjak Backend!"
-
 # Access Tornjak UI
 open http://spire-tornjak-ui.localtest.me:8080/
 ```
@@ -646,7 +642,7 @@ For step-by-step AuthBridge demos with real working examples, see:
 For complete documentation, see:
 
 - **[AuthBridge README](https://github.com/kagenti/kagenti-extensions/tree/main/authbridge)** - Full demo instructions
-- **[AuthProxy](https://github.com/kagenti/kagenti-extensions/tree/main/authbridge/authproxy)** - Token validation and exchange proxy
+- **[AuthProxy](https://github.com/kagenti/kagenti-extensions/tree/main/authbridge)** - Token validation and exchange proxy
 
 > **Note**: The AuthBridge demo in kagenti-extensions includes client-registration components for demonstration purposes. In production Kagenti deployments, client registration is handled by the kagenti-operator controller.
 

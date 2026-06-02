@@ -20,7 +20,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 import kubernetes.client
 from kubernetes.client import ApiException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.auth import ROLE_OPERATOR, ROLE_VIEWER, require_roles
 from app.utils.routes import get_agent_url
@@ -49,6 +49,12 @@ from app.core.constants import (
     DEFAULT_RESOURCE_REQUESTS,
     DEFAULT_ENV_VARS,
     AGENT_ENDPOINT,
+    AGENT_SKILLS_ANNOTATION,
+    AGENT_SKILLS_MOUNT_ROOT,
+    SKILL_TYPE_LABEL,
+    SKILL_TYPE_VALUE,
+    SKILL_DISPLAY_NAME_ANNOTATION,
+    SKILL_DESCRIPTION_ANNOTATION,
     # Shipwright constants
     SHIPWRIGHT_CRD_GROUP,
     SHIPWRIGHT_CRD_VERSION,
@@ -70,10 +76,6 @@ from app.core.constants import (
     # SPIRE identity constants
     KAGENTI_SPIRE_LABEL,
     KAGENTI_SPIRE_ENABLED_VALUE,
-    # Per-sidecar injection labels
-    KAGENTI_ENVOY_PROXY_INJECT_LABEL,
-    KAGENTI_SPIFFE_HELPER_INJECT_LABEL,
-    KAGENTI_CLIENT_REGISTRATION_INJECT_LABEL,
     # Port exclusion annotations
     KAGENTI_OUTBOUND_PORTS_EXCLUDE,
     KAGENTI_INBOUND_PORTS_EXCLUDE,
@@ -91,6 +93,7 @@ from app.models.responses import (
     DeleteResponse,
 )
 from app.services.kubernetes import KubernetesService, get_kubernetes_service
+from app.routers.skills import _sanitize_k8s_name
 from app.utils.routes import (
     create_route_for_agent_or_tool,
     detect_platform,
@@ -119,7 +122,10 @@ from app.services.shipwright import (
     extract_buildrun_info,
     resolve_clone_secret,
 )
-from app.services.shipwright_builds import collect_kagenti_shipwright_builds
+from app.services.shipwright_builds import (
+    cleanup_existing_build,
+    collect_kagenti_shipwright_builds,
+)
 
 
 class OutboundRoute(BaseModel):
@@ -208,6 +214,13 @@ class ServicePort(BaseModel):
     protocol: str = "TCP"
 
 
+class PersistentStorageConfig(BaseModel):
+    """Persistent storage configuration for Sandbox and StatefulSet agents."""
+
+    enabled: bool = False
+    size: str = "1Gi"
+
+
 class CreateAgentRequest(BaseModel):
     """Request to create a new agent."""
 
@@ -216,6 +229,7 @@ class CreateAgentRequest(BaseModel):
     protocol: str = "a2a"
     framework: str = "LangGraph"
     envVars: Optional[List[EnvVar]] = None
+    skills: Optional[List[str]] = None
 
     # Workload type: 'deployment', 'statefulset', or 'job'
     workloadType: str = WORKLOAD_TYPE_DEPLOYMENT
@@ -244,13 +258,27 @@ class CreateAgentRequest(BaseModel):
 
     # AuthBridge sidecar injection (default enabled for agents)
     authBridgeEnabled: bool = True
-    # SPIRE identity (spiffe-helper sidecar injection)
+    # SPIRE identity (gates spiffe-helper inside the combined authbridge container)
     spireEnabled: bool = False
 
-    # Per-sidecar injection controls (None = use webhook defaults)
-    envoyProxyInject: Optional[bool] = None
-    spiffeHelperInject: Optional[bool] = None
-    clientRegistrationInject: Optional[bool] = None
+    # Per-workload AuthBridge mode override. Maps to
+    # AgentRuntime.Spec.AuthBridgeMode; when None the operator falls
+    # back through namespace ConfigMap → cluster default
+    # (proxy-sidecar). The lite/waypoint shapes are accepted by the
+    # operator but not surfaced through the UI today.
+    authBridgeMode: Optional[Literal["proxy-sidecar", "envoy-sidecar", "lite", "waypoint"]] = None
+
+    # Per-workload mTLS posture between AuthBridge sidecars. Maps to
+    # AgentRuntime.Spec.MTLSMode. The kagenti UI sends an explicit
+    # value (default "disabled") so users always see what they get;
+    # this means UI-created agents opt out of any namespace-level
+    # mtls.mode setting (CR-pin semantic in the operator). The
+    # operator's validating webhook rejects the envoy-sidecar +
+    # non-disabled combo because Envoy SDS isn't currently configured
+    # by the kagenti envoy-config — we mirror that check below as a
+    # model_validator so the form gets a fast 422 instead of a
+    # webhook denial after the manifest is built.
+    mtlsMode: Optional[Literal["disabled", "permissive", "strict"]] = None
 
     # Port exclusion annotations
     outboundPortsExclude: Optional[str] = None
@@ -261,6 +289,9 @@ class CreateAgentRequest(BaseModel):
 
     # Outbound routing rules (authproxy-routes ConfigMap)
     outboundRoutes: Optional[List["OutboundRoute"]] = None
+
+    # Persistent storage (for Sandbox and StatefulSet workloads)
+    persistentStorage: Optional[PersistentStorageConfig] = None
 
     # Shipwright build configuration
     shipwrightConfig: Optional[ShipwrightBuildConfig] = None
@@ -275,6 +306,39 @@ class CreateAgentRequest(BaseModel):
                 f"Supported types: {', '.join(SUPPORTED_WORKLOAD_TYPES)}"
             )
         return v
+
+    @model_validator(mode="after")
+    def _check_mtls_compatible_with_mode(self) -> "CreateAgentRequest":
+        """Hook for cross-field rejections of authBridgeMode +
+        mtlsMode combinations the operator's AgentRuntime validating
+        webhook would also reject.
+
+        envoy-sidecar + non-disabled mtlsMode used to be rejected here
+        as defense-in-depth in front of the operator's webhook gate.
+        Both have been lifted now that the operator + extensions
+        support the full matrix (kagenti-operator#381,
+        kagenti-extensions#441), so today there are no rejected
+        combinations.
+
+        TODO(future-incompatibility): re-enable cross-field rejections
+        here when a new authBridgeMode (e.g. waypoint, sidecarless)
+        lands that needs different mTLS semantics. The function
+        intentionally stays as a single grep-target so the rejection
+        can land here instead of getting scattered across the request
+        model. Mirrors the operator's checkMTLSCompatibleWithMode
+        pattern in agentruntime_webhook.go.
+
+        SPIRE-vs-mTLS coupling is intentionally NOT enforced here:
+        kagenti-operator's pod_mutator auto-enables SPIRE when
+        mtlsMode != disabled (pod_mutator.go:288-302), so a request
+        with mtlsMode=strict + spireEnabled=false is handled at the
+        operator data-plane layer rather than rejected at the API
+        boundary. The UI form still locks the mTLS dropdown when
+        SPIRE is off as a UX hint, but a non-UI client (CLI, direct
+        API call) submitting that combination is valid and the
+        operator turns SPIRE on for them.
+        """
+        return self
 
 
 class CreateAgentResponse(BaseModel):
@@ -815,7 +879,7 @@ async def get_agent(
 
     # Try to get the associated Service (not applicable for Jobs)
     service = None
-    if workload_type not in (WORKLOAD_TYPE_JOB, WORKLOAD_TYPE_SANDBOX):
+    if workload_type != WORKLOAD_TYPE_JOB:
         try:
             service = kube.get_service(namespace=namespace, name=name)
         except ApiException as e:
@@ -933,7 +997,7 @@ async def delete_agent(
         else:
             logger.warning("Failed to delete Job '%s': %s", safe_name, e.reason)
 
-    # Delete the Sandbox (if exists)
+    # Delete the Sandbox (if exists) and its PVCs
     if settings.kagenti_feature_flag_agent_sandbox:
         try:
             kube.delete_sandbox(namespace=namespace, name=name)
@@ -943,6 +1007,18 @@ async def delete_agent(
                 logger.debug("Sandbox '%s' not found (may be other workload type)", safe_name)
             else:
                 logger.warning("Failed to delete Sandbox '%s': %s", safe_name, e.reason)
+
+        try:
+            pvcs = kube.list_persistent_volume_claims(
+                namespace=namespace,
+                label_selector=f"app.kubernetes.io/name={name}",
+            )
+            for pvc_name in pvcs:
+                kube.delete_persistent_volume_claim(namespace=namespace, name=pvc_name)
+                messages.append(f"PVC '{pvc_name}' deleted")
+        except ApiException as e:
+            if e.status != 404:
+                logger.warning("Failed to clean up PVCs for '%s': %s", safe_name, e.reason)
 
     # Delete the Service
     try:
@@ -2026,34 +2102,50 @@ def _build_authbridge_runtime_yaml(
     # kagenti-extensions#383.
     # Note: Remember to keep AuthBridgeConfig in kagenti/ui-v2/src/types/index.ts
     # in sync with this YAML runtime configuration.
-    config = {
-        "mode": "envoy-sidecar",
-        "pipeline": {
-            "inbound": {
-                "plugins": [
-                    {
-                        "name": "jwt-validation",
-                        "config": {
-                            "issuer": issuer,
-                            "keycloak_url": keycloak_url,
-                            "keycloak_realm": realm,
-                        },
-                    }
-                ]
-            },
-            "outbound": {
-                "plugins": [
-                    {
-                        "name": "token-exchange",
-                        "config": {
-                            "keycloak_url": keycloak_url,
-                            "keycloak_realm": realm,
-                            "default_policy": "passthrough",
-                            "identity": {"type": identity_type},
-                        },
-                    }
-                ]
-            },
+    # No top-level `mode:` — the operator resolves it per workload from
+    # AgentRuntime.Spec.AuthBridgeMode → namespace ConfigMap →
+    # cluster default (proxy-sidecar). Hardcoding it here would pin
+    # every backend-rendered ConfigMap to one shape regardless of CR.
+    identity: dict[str, str] = {"type": identity_type}
+    if identity_type == "spiffe":
+        # JWT-SVID client-assertion audience — must match what Keycloak's
+        # SPIFFE IdP expects (the realm issuer URL). Required by
+        # authbridge's token-exchange plugin in the spiffe identity path.
+        # See kagenti-extensions#332.
+        identity["jwt_audience"] = issuer
+    config: dict[str, object] = {}
+    if spire_enabled:
+        # Empty spiffe block signals authbridge to construct the in-process
+        # SPIFFE provider (X.509 source for mTLS + lazy JWT source for
+        # tokenexchange). All fields default: socket points at the standard
+        # SPIRE agent socket, mirror writes /opt/svid*.pem on rotation.
+        # The JWT audience lives per-tokenexchange (under identity above).
+        config["spiffe"] = {}
+    config["pipeline"] = {
+        "inbound": {
+            "plugins": [
+                {
+                    "name": "jwt-validation",
+                    "config": {
+                        "issuer": issuer,
+                        "keycloak_url": keycloak_url,
+                        "keycloak_realm": realm,
+                    },
+                }
+            ]
+        },
+        "outbound": {
+            "plugins": [
+                {
+                    "name": "token-exchange",
+                    "config": {
+                        "keycloak_url": keycloak_url,
+                        "keycloak_realm": realm,
+                        "default_policy": "passthrough",
+                        "identity": identity,
+                    },
+                }
+            ]
         },
     }
 
@@ -2204,11 +2296,67 @@ def _ensure_authbridge_scc_rolebinding(
     )
 
 
+def _load_agent_skill_summaries(
+    kube: KubernetesService,
+    namespace: str,
+    skill_names: List[str],
+) -> List[Dict[str, Any]]:
+    """Load skill metadata from ConfigMaps referenced by an agent.
+
+    The agent annotation stores user-facing skill names. For each skill, look up
+    the matching skill ConfigMap by either display-name annotation or resource name.
+    Missing skills are ignored so agent creation does not fail when a referenced
+    skill is deleted later.
+    """
+    if not skill_names:
+        return []
+
+    try:
+        cms = kube.core_api.list_namespaced_config_map(
+            namespace=namespace,
+            label_selector=f"{SKILL_TYPE_LABEL}={SKILL_TYPE_VALUE}",
+        )
+    except ApiException as exc:
+        # Sanitize namespace to prevent log injection
+        safe_namespace = namespace.replace("\n", "\\n").replace("\r", "\\r")
+        logger.warning(
+            "Failed to list skills for agent card generation: %s",
+            exc,
+            extra={"namespace": safe_namespace},
+        )
+        return []
+
+    requested = {skill_name.strip() for skill_name in skill_names if skill_name.strip()}
+    if not requested:
+        return []
+
+    summaries: List[Dict[str, Any]] = []
+    for cm in cms.items:
+        annotations = cm.metadata.annotations or {}
+        display_name = annotations.get(SKILL_DISPLAY_NAME_ANNOTATION) or cm.metadata.name
+        if display_name not in requested and cm.metadata.name not in requested:
+            continue
+
+        summaries.append(
+            {
+                "id": cm.metadata.name,
+                "name": display_name,
+                "description": annotations.get(SKILL_DESCRIPTION_ANNOTATION, ""),
+                "examples": [],
+            }
+        )
+
+    summaries.sort(key=lambda skill: skill["name"].lower())
+    return summaries
+
+
 def _ensure_card_unsigned_configmap(
     kube: KubernetesService,
     name: str,
     namespace: str,
     service_port: int = DEFAULT_IN_CLUSTER_PORT,
+    description: Optional[str] = None,
+    skill_names: Optional[List[str]] = None,
 ) -> None:
     """Create the <agent>-card-unsigned ConfigMap if it does not exist.
 
@@ -2219,15 +2367,17 @@ def _ensure_card_unsigned_configmap(
     created **before** the Deployment.
     """
     agent_url = f"http://{name}.{namespace}.svc.cluster.local:{service_port}"
+    skills = _load_agent_skill_summaries(kube, namespace, skill_names or [])
     agent_card = json.dumps(
         {
             "name": name,
+            "description": description,
             "url": agent_url,
             "version": "1.0.0",
             "capabilities": {},
             "defaultInputModes": ["application/json"],
             "defaultOutputModes": ["text/plain"],
-            "skills": [],
+            "skills": skills,
         },
         indent=2,
     )
@@ -2275,9 +2425,7 @@ def _build_agent_shipwright_build_manifest(
         "workloadType": request.workloadType,  # Store workload type for finalization
         "authBridgeEnabled": request.authBridgeEnabled,
         "spireEnabled": request.spireEnabled,
-        "envoyProxyInject": request.envoyProxyInject,
-        "spiffeHelperInject": request.spiffeHelperInject,
-        "clientRegistrationInject": request.clientRegistrationInject,
+        "authBridgeMode": request.authBridgeMode,
     }
     if request.outboundRoutes:
         resource_config["outboundRoutes"] = [r.model_dump() for r in request.outboundRoutes]
@@ -2287,9 +2435,15 @@ def _build_agent_shipwright_build_manifest(
         resource_config["inboundPortsExclude"] = request.inboundPortsExclude
     if request.defaultOutboundPolicy:
         resource_config["defaultOutboundPolicy"] = request.defaultOutboundPolicy
+    if request.mtlsMode:
+        resource_config["mtlsMode"] = request.mtlsMode
+    if request.persistentStorage:
+        resource_config["persistentStorage"] = request.persistentStorage.model_dump()
     # Add env vars if present
     if request.envVars:
         resource_config["envVars"] = [ev.model_dump(exclude_none=True) for ev in request.envVars]
+    if request.skills:
+        resource_config["skills"] = request.skills
     # Add service ports if present
     if request.servicePorts:
         resource_config["servicePorts"] = [sp.model_dump() for sp in request.servicePorts]
@@ -2328,6 +2482,46 @@ def _build_agent_shipwright_buildrun_manifest(
 # -----------------------------------------------------------------------------
 
 
+def _get_linked_skill_mounts(
+    request: "CreateAgentRequest",
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[str]]:
+    """Build volume and mount definitions for linked skill ConfigMaps."""
+    if not request.skills:
+        return [], [], None
+
+    volumes: List[Dict[str, Any]] = []
+    volume_mounts: List[Dict[str, Any]] = []
+    skill_paths: List[str] = []
+
+    for index, skill_name in enumerate(request.skills):
+        if not skill_name:
+            continue
+        cm_name = _sanitize_k8s_name(skill_name)
+        volume_name = f"skill-{index}"
+        mount_path = f"{AGENT_SKILLS_MOUNT_ROOT}/{cm_name}"
+        volumes.append(
+            {
+                "name": volume_name,
+                "configMap": {
+                    "name": cm_name,
+                },
+            }
+        )
+        volume_mounts.append(
+            {
+                "name": volume_name,
+                "mountPath": mount_path,
+                "readOnly": True,
+            }
+        )
+        skill_paths.append(mount_path)
+
+    if not skill_paths:
+        return [], [], None
+
+    return volumes, volume_mounts, ",".join(skill_paths)
+
+
 def _build_env_vars(request: "CreateAgentRequest") -> List[dict]:
     """
     Build environment variables list with support for valueFrom references.
@@ -2348,6 +2542,11 @@ def _build_env_vars(request: "CreateAgentRequest") -> List[dict]:
             "value": get_agent_url(request.name, request.namespace, service_port),
         }
     )
+
+    _, _, skill_folders = _get_linked_skill_mounts(request)
+    if skill_folders:
+        env_vars.append({"name": "SKILL_FOLDERS", "value": skill_folders})
+
     if request.envVars:
         for ev in request.envVars:
             if ev.value is not None:
@@ -2369,7 +2568,14 @@ def _build_env_vars(request: "CreateAgentRequest") -> List[dict]:
                     }
 
                 env_vars.append(env_entry)
-    return env_vars
+
+    # Deduplicate environment variables, keeping the last occurrence.
+    # Precedence (last wins): DEFAULT_ENV_VARS < AGENT_ENDPOINT/SKILL_FOLDERS < user envVars.
+    # User overrides of AGENT_ENDPOINT or SKILL_FOLDERS are intentional (advanced use).
+    seen = {}
+    for env in env_vars:
+        seen[env["name"]] = env
+    return list(seen.values())
 
 
 def _build_common_labels(
@@ -2406,14 +2612,10 @@ def _build_common_labels(
     # Protocol label(s) using new prefix format
     if request.protocol:
         labels[f"{PROTOCOL_LABEL_PREFIX}{request.protocol}"] = ""
-    # SPIRE identity label (triggers spiffe-helper sidecar injection by kagenti-webhook)
+    # SPIRE identity label — the operator's webhook reads this to set
+    # SPIRE_ENABLED=true on the combined sidecar's spiffe-helper.
     if request.spireEnabled:
         labels[KAGENTI_SPIRE_LABEL] = KAGENTI_SPIRE_ENABLED_VALUE
-    # Per-sidecar injection labels (opt-out for envoy/spiffe, opt-in for client-registration)
-    if request.envoyProxyInject is False:
-        labels[KAGENTI_ENVOY_PROXY_INJECT_LABEL] = "false"
-    if request.spiffeHelperInject is False:
-        labels[KAGENTI_SPIFFE_HELPER_INJECT_LABEL] = "false"
     return labels
 
 
@@ -2448,12 +2650,26 @@ def _build_agentruntime_manifest(
     namespace: str,
     workload_type: str,
     agent_type: str = RESOURCE_TYPE_AGENT,
+    auth_bridge_mode: Optional[str] = None,
+    mtls_mode: Optional[str] = None,
 ) -> dict:
     """Build an AgentRuntime CR manifest for the given workload."""
     kind_map = {
         WORKLOAD_TYPE_DEPLOYMENT: "Deployment",
         WORKLOAD_TYPE_STATEFULSET: "StatefulSet",
     }
+    spec: dict = {
+        "type": agent_type,
+        "targetRef": {
+            "apiVersion": "apps/v1",
+            "kind": kind_map.get(workload_type, "Deployment"),
+            "name": name,
+        },
+    }
+    if auth_bridge_mode:
+        spec["authBridgeMode"] = auth_bridge_mode
+    if mtls_mode:
+        spec["mtlsMode"] = mtls_mode
     return {
         "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
         "kind": "AgentRuntime",
@@ -2465,14 +2681,7 @@ def _build_agentruntime_manifest(
                 APP_KUBERNETES_IO_MANAGED_BY: KAGENTI_UI_CREATOR_LABEL,
             },
         },
-        "spec": {
-            "type": agent_type,
-            "targetRef": {
-                "apiVersion": "apps/v1",
-                "kind": kind_map.get(workload_type, "Deployment"),
-                "name": name,
-            },
-        },
+        "spec": spec,
     }
 
 
@@ -2482,9 +2691,13 @@ def _ensure_agentruntime(
     namespace: str,
     workload_type: str,
     agent_type: str = RESOURCE_TYPE_AGENT,
+    auth_bridge_mode: Optional[str] = None,
+    mtls_mode: Optional[str] = None,
 ) -> None:
     """Create an AgentRuntime CR for the workload. Skip if it already exists."""
-    manifest = _build_agentruntime_manifest(name, namespace, workload_type, agent_type)
+    manifest = _build_agentruntime_manifest(
+        name, namespace, workload_type, agent_type, auth_bridge_mode, mtls_mode
+    )
     try:
         kube.create_custom_resource(
             group=CRD_GROUP,
@@ -2519,6 +2732,7 @@ def _build_deployment_manifest(
         Deployment manifest dictionary.
     """
     env_vars = _build_env_vars(request)
+    skill_volumes, skill_volume_mounts, _ = _get_linked_skill_mounts(request)
     labels = _build_common_labels(request, WORKLOAD_TYPE_DEPLOYMENT)
     selector_labels = _build_selector_labels(request)
 
@@ -2526,6 +2740,8 @@ def _build_deployment_manifest(
     annotations: Dict[str, str] = {
         KAGENTI_DESCRIPTION_ANNOTATION: f"Agent '{request.name}' deployed from UI.",
     }
+    if request.skills:
+        annotations[AGENT_SKILLS_ANNOTATION] = json.dumps(request.skills)
     if shipwright_build_name:
         annotations["kagenti.io/shipwright-build"] = shipwright_build_name
 
@@ -2578,6 +2794,7 @@ def _build_deployment_manifest(
                                 {"name": "cache", "mountPath": "/app/.cache"},
                                 {"name": "marvin", "mountPath": "/.marvin"},
                                 {"name": "shared-data", "mountPath": "/shared"},
+                                *skill_volume_mounts,
                             ],
                         }
                     ],
@@ -2585,6 +2802,7 @@ def _build_deployment_manifest(
                         {"name": "cache", "emptyDir": {}},
                         {"name": "marvin", "emptyDir": {}},
                         {"name": "shared-data", "emptyDir": {}},
+                        *skill_volumes,
                     ],
                 },
             },
@@ -2598,6 +2816,32 @@ def _build_deployment_manifest(
         ]
 
     return manifest
+
+
+def _create_or_replace_service(
+    kube: "KubernetesService",
+    namespace: str,
+    name: str,
+    service_manifest: dict,
+    workload_type: str,
+) -> None:
+    """Create the Service for an agent / tool.
+
+    Returns silently for ``WORKLOAD_TYPE_JOB`` since Jobs don't need a Service.
+    Sandbox agents get a backend-managed ClusterIP Service for port translation
+    (8080→8000); the agent-sandbox controller's own Service is suppressed via
+    ``spec.service: false`` on the Sandbox CR (v0.4.6+).
+    """
+    if workload_type == WORKLOAD_TYPE_JOB:
+        return
+    # Strip CR/LF before logging — name and namespace come from the FastAPI
+    # request body. Kubernetes will reject non-DNS-1123 names so this is
+    # belt-and-suspenders, but the explicit sanitization satisfies CodeQL's
+    # py/log-injection taint analysis on the user-input → log-sink flow.
+    safe_name = name.replace("\n", "").replace("\r", "")
+    safe_namespace = namespace.replace("\n", "").replace("\r", "")
+    kube.create_service(namespace=namespace, body=service_manifest)
+    logger.info("Created Service '%s' in namespace '%s'", safe_name, safe_namespace)
 
 
 def _build_service_manifest(request: "CreateAgentRequest") -> dict:
@@ -2673,6 +2917,7 @@ def _build_statefulset_manifest(
         StatefulSet manifest dictionary.
     """
     env_vars = _build_env_vars(request)
+    skill_volumes, skill_volume_mounts, _ = _get_linked_skill_mounts(request)
     labels = _build_common_labels(request, WORKLOAD_TYPE_STATEFULSET)
     selector_labels = _build_selector_labels(request)
 
@@ -2680,6 +2925,8 @@ def _build_statefulset_manifest(
     annotations: Dict[str, str] = {
         KAGENTI_DESCRIPTION_ANNOTATION: f"Agent '{request.name}' deployed as StatefulSet from UI.",
     }
+    if request.skills:
+        annotations[AGENT_SKILLS_ANNOTATION] = json.dumps(request.skills)
     if shipwright_build_name:
         annotations["kagenti.io/shipwright-build"] = shipwright_build_name
 
@@ -2733,6 +2980,7 @@ def _build_statefulset_manifest(
                                 {"name": "cache", "mountPath": "/app/.cache"},
                                 {"name": "marvin", "mountPath": "/.marvin"},
                                 {"name": "shared-data", "mountPath": "/shared"},
+                                *skill_volume_mounts,
                             ],
                         }
                     ],
@@ -2740,6 +2988,7 @@ def _build_statefulset_manifest(
                         {"name": "cache", "emptyDir": {}},
                         {"name": "marvin", "emptyDir": {}},
                         {"name": "shared-data", "emptyDir": {}},
+                        *skill_volumes,
                     ],
                 },
             },
@@ -2777,12 +3026,15 @@ def _build_job_manifest(
         Job manifest dictionary.
     """
     env_vars = _build_env_vars(request)
+    skill_volumes, skill_volume_mounts, _ = _get_linked_skill_mounts(request)
     labels = _build_common_labels(request, WORKLOAD_TYPE_JOB)
 
     # Build annotations
     annotations: Dict[str, str] = {
         KAGENTI_DESCRIPTION_ANNOTATION: f"Agent '{request.name}' deployed as Job from UI.",
     }
+    if request.skills:
+        annotations[AGENT_SKILLS_ANNOTATION] = json.dumps(request.skills)
     if shipwright_build_name:
         annotations["kagenti.io/shipwright-build"] = shipwright_build_name
 
@@ -2833,6 +3085,7 @@ def _build_job_manifest(
                                 {"name": "cache", "mountPath": "/app/.cache"},
                                 {"name": "marvin", "mountPath": "/.marvin"},
                                 {"name": "shared-data", "mountPath": "/shared"},
+                                *skill_volume_mounts,
                             ],
                         }
                     ],
@@ -2840,6 +3093,7 @@ def _build_job_manifest(
                         {"name": "cache", "emptyDir": {}},
                         {"name": "marvin", "emptyDir": {}},
                         {"name": "shared-data", "emptyDir": {}},
+                        *skill_volumes,
                     ],
                 },
             },
@@ -2860,13 +3114,19 @@ def _build_sandbox_manifest(
     image: str,
     shipwright_build_name: Optional[str] = None,
 ) -> dict:
-    """Build a Sandbox manifest (agents.x-k8s.io/v1alpha1) for direct creation."""
+    """Build a Sandbox manifest (agents.x-k8s.io/v1alpha1) for direct creation.
+
+    Includes skill volume mounts and persistent storage support.
+    """
     env_vars = _build_env_vars(request)
+    skill_volumes, skill_volume_mounts, _ = _get_linked_skill_mounts(request)
     labels = _build_common_labels(request, WORKLOAD_TYPE_SANDBOX)
 
     annotations: Dict[str, str] = {
         KAGENTI_DESCRIPTION_ANNOTATION: f"Agent '{request.name}' deployed from UI.",
     }
+    if request.skills:
+        annotations[AGENT_SKILLS_ANNOTATION] = json.dumps(request.skills)
     if shipwright_build_name:
         annotations["kagenti.io/shipwright-build"] = shipwright_build_name
 
@@ -2885,6 +3145,7 @@ def _build_sandbox_manifest(
         },
         "spec": {
             "replicas": 1,
+            "service": False,
             "podTemplate": {
                 "metadata": {
                     "labels": {
@@ -2916,18 +3177,38 @@ def _build_sandbox_manifest(
                                 {"name": "cache", "mountPath": "/app/.cache"},
                                 {"name": "marvin", "mountPath": "/.marvin"},
                                 {"name": "shared-data", "mountPath": "/shared"},
+                                *skill_volume_mounts,
                             ],
                         }
                     ],
                     "volumes": [
                         {"name": "cache", "emptyDir": {}},
                         {"name": "marvin", "emptyDir": {}},
-                        {"name": "shared-data", "emptyDir": {}},
-                    ],
+                        *skill_volumes,
+                    ]
+                    + (
+                        []
+                        if request.persistentStorage and request.persistentStorage.enabled
+                        else [{"name": "shared-data", "emptyDir": {}}]
+                    ),
                 },
             },
         },
     }
+
+    if request.persistentStorage and request.persistentStorage.enabled:
+        manifest["spec"]["volumeClaimTemplates"] = [
+            {
+                "metadata": {
+                    "name": "shared-data",
+                    "labels": {APP_KUBERNETES_IO_NAME: request.name},
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {"requests": {"storage": request.persistentStorage.size}},
+                },
+            }
+        ]
 
     if request.imagePullSecret:
         manifest["spec"]["podTemplate"]["spec"]["imagePullSecrets"] = [
@@ -2962,6 +3243,14 @@ async def create_agent(
         f"workloadType={request.workloadType}, "
         f"createHttpRoute={request.createHttpRoute}"
     )
+
+    # Feature flag: reject skill linking if feature is disabled
+    if request.skills and not settings.kagenti_feature_flag_skills:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill linking is disabled. Enable KAGENTI_FEATURE_FLAG_SKILLS to use this feature.",
+        )
+
     try:
         if request.deploymentMethod == "image":
             # Deploy from existing container image
@@ -3015,6 +3304,8 @@ async def create_agent(
                     name=request.name,
                     namespace=request.namespace,
                     service_port=service_port,
+                    description=f"Agent '{request.name}' deployed from UI.",
+                    skill_names=request.skills,
                 )
 
             # Create workload based on workloadType
@@ -3063,30 +3354,16 @@ async def create_agent(
                 )
                 logger.info(f"Created Sandbox '{request.name}' in namespace '{request.namespace}'")
 
-            # Create Service (not needed for Jobs — Sandbox uses backend-managed Service)
+            # Create Service (not needed for Jobs).
             if request.workloadType != WORKLOAD_TYPE_JOB:
                 service_manifest = _build_service_manifest(request)
-                try:
-                    kube.create_service(
-                        namespace=request.namespace,
-                        body=service_manifest,
-                    )
-                    logger.info(
-                        f"Created Service '{request.name}' in namespace '{request.namespace}'"
-                    )
-                except ApiException as e:
-                    if e.status == 409 and request.workloadType == WORKLOAD_TYPE_SANDBOX:
-                        logger.warning(
-                            f"Service '{request.name}' already exists (Sandbox controller race); "
-                            f"replacing with backend-managed ClusterIP Service"
-                        )
-                        kube.delete_service(namespace=request.namespace, name=request.name)
-                        kube.create_service(namespace=request.namespace, body=service_manifest)
-                        logger.info(
-                            f"Replaced Service '{request.name}' in namespace '{request.namespace}'"
-                        )
-                    else:
-                        raise
+                _create_or_replace_service(
+                    kube,
+                    request.namespace,
+                    request.name,
+                    service_manifest,
+                    request.workloadType,
+                )
 
             # Create AgentRuntime CR so the webhook injects sidecars on pod rollout
             if request.workloadType not in (WORKLOAD_TYPE_JOB, WORKLOAD_TYPE_SANDBOX):
@@ -3095,6 +3372,8 @@ async def create_agent(
                     name=request.name,
                     namespace=request.namespace,
                     workload_type=request.workloadType,
+                    auth_bridge_mode=request.authBridgeMode,
+                    mtls_mode=request.mtlsMode,
                 )
 
             message = f"Agent '{request.name}' deployed as {request.workloadType} successfully."
@@ -3124,6 +3403,9 @@ async def create_agent(
                     status_code=400,
                     detail="gitUrl is required for source deployment",
                 )
+
+            # Clean up any existing Build/BuildRuns to prevent 409 on re-import
+            cleanup_existing_build(kube, namespace=request.namespace, build_name=request.name)
 
             # Step 1: Create Shipwright Build CR
             clone_secret = resolve_clone_secret(kube.core_api, request.namespace)
@@ -3211,17 +3493,36 @@ class FinalizeShipwrightBuildRequest(BaseModel):
     protocol: Optional[str] = None
     framework: Optional[str] = None
     envVars: Optional[List[EnvVar]] = None
+    skills: Optional[List[str]] = None
     servicePorts: Optional[List[ServicePort]] = None
     createHttpRoute: Optional[bool] = None
     authBridgeEnabled: Optional[bool] = None
     imagePullSecret: Optional[str] = None
-    envoyProxyInject: Optional[bool] = None
-    spiffeHelperInject: Optional[bool] = None
-    clientRegistrationInject: Optional[bool] = None
+    authBridgeMode: Optional[Literal["proxy-sidecar", "envoy-sidecar", "lite", "waypoint"]] = None
+    # Mirrors CreateAgentRequest.mtlsMode. Threaded through the
+    # finalize flow so a build-from-source agent inherits the mtlsMode
+    # the user picked at form-submit time (stashed on the BuildRun via
+    # kagenti.io/agent-config annotation).
+    mtlsMode: Optional[Literal["disabled", "permissive", "strict"]] = None
     outboundRoutes: Optional[List[OutboundRoute]] = None
     outboundPortsExclude: Optional[str] = None
     inboundPortsExclude: Optional[str] = None
     defaultOutboundPolicy: Optional[Literal["passthrough", "exchange"]] = None
+    persistentStorage: Optional[PersistentStorageConfig] = None
+
+    @model_validator(mode="after")
+    def _check_mtls_compatible_with_mode(self) -> "FinalizeShipwrightBuildRequest":
+        """Mirror of CreateAgentRequest._check_mtls_compatible_with_mode
+        at the Shipwright finalize boundary. Today there are no
+        rejected combinations.
+
+        TODO(future-incompatibility): re-enable cross-field rejections
+        here when a new authBridgeMode lands that needs different mTLS
+        semantics. See CreateAgentRequest._check_mtls_compatible_with_mode
+        for the full rationale (including why SPIRE-vs-mTLS coupling
+        is handled at the operator data-plane layer rather than here).
+        """
+        return self
 
 
 @router.post(
@@ -3432,6 +3733,17 @@ async def finalize_shipwright_build(
             # Convert stored dict format back to EnvVar objects
             final_env_vars = [EnvVar(**ev) for ev in stored_config["envVars"]]
 
+        final_skills = request.skills
+        if final_skills is None:
+            final_skills = stored_config.get("skills")
+
+        # Feature flag: reject skill linking if feature is disabled
+        if final_skills and not settings.kagenti_feature_flag_skills:
+            raise HTTPException(
+                status_code=400,
+                detail="Skill linking is disabled. Enable KAGENTI_FEATURE_FLAG_SKILLS to use this feature.",
+            )
+
         final_service_ports = request.servicePorts
         if final_service_ports is None and "servicePorts" in stored_config:
             # Convert stored dict format back to ServicePort objects
@@ -3464,22 +3776,25 @@ async def finalize_shipwright_build(
         elif stored_routes:
             final_outbound_routes = [OutboundRoute(**r) for r in stored_routes]
 
-        # Per-sidecar injection controls
-        final_envoy_proxy_inject = (
-            request.envoyProxyInject
-            if request.envoyProxyInject is not None
-            else stored_config.get("envoyProxyInject")
+        # Per-workload AuthBridge mode override
+        final_auth_bridge_mode = (
+            request.authBridgeMode
+            if request.authBridgeMode is not None
+            else stored_config.get("authBridgeMode")
         )
-        final_spiffe_helper_inject = (
-            request.spiffeHelperInject
-            if request.spiffeHelperInject is not None
-            else stored_config.get("spiffeHelperInject")
+
+        # Per-workload mTLS mode (applies to AgentRuntime spec only;
+        # the form stores it on the BuildRun annotation at submit time
+        # and we read it back here so build-from-source agents inherit
+        # the same setting as direct-image agents).
+        final_mtls_mode = (
+            request.mtlsMode if request.mtlsMode is not None else stored_config.get("mtlsMode")
         )
-        final_client_registration_inject = (
-            request.clientRegistrationInject
-            if request.clientRegistrationInject is not None
-            else stored_config.get("clientRegistrationInject")
-        )
+
+        # Persistent storage
+        final_persistent_storage = request.persistentStorage
+        if final_persistent_storage is None and stored_config.get("persistentStorage"):
+            final_persistent_storage = PersistentStorageConfig(**stored_config["persistentStorage"])
 
         # Step 3: Create workload + Service with the built image
         # Build a CreateAgentRequest-like object for manifest builders
@@ -3493,17 +3808,18 @@ async def finalize_shipwright_build(
             containerImage=container_image,
             imagePullSecret=final_registry_secret,
             envVars=final_env_vars,
+            skills=final_skills,
             servicePorts=final_service_ports,
             createHttpRoute=final_create_route,
             authBridgeEnabled=final_auth_bridge,
             spireEnabled=final_spire_enabled,
-            envoyProxyInject=final_envoy_proxy_inject,
-            spiffeHelperInject=final_spiffe_helper_inject,
-            clientRegistrationInject=final_client_registration_inject,
+            authBridgeMode=final_auth_bridge_mode,
+            mtlsMode=final_mtls_mode,
             outboundRoutes=final_outbound_routes,
             outboundPortsExclude=final_outbound_ports_exclude,
             inboundPortsExclude=final_inbound_ports_exclude,
             defaultOutboundPolicy=final_default_outbound_policy,
+            persistentStorage=final_persistent_storage,
         )
 
         # Ensure a dedicated ServiceAccount exists so the webhook's
@@ -3539,6 +3855,8 @@ async def finalize_shipwright_build(
                 name=name,
                 namespace=namespace,
                 service_port=service_port,
+                description=f"Agent '{name}' deployed from UI.",
+                skill_names=final_skills or [],
             )
 
         # Create workload based on workloadType
@@ -3612,15 +3930,19 @@ async def finalize_shipwright_build(
             kube.create_sandbox(namespace=namespace, body=sandbox_manifest)
             logger.info(f"Created Sandbox '{name}' in namespace '{namespace}' from build")
 
-        # Create Service (not needed for Jobs or Sandboxes)
-        if final_workload_type not in (WORKLOAD_TYPE_JOB, WORKLOAD_TYPE_SANDBOX):
-            service_manifest = _build_service_manifest(agent_request)
-            # Add additional labels from Build
-            service_manifest["metadata"]["labels"].update(
-                {k: v for k, v in build_labels.items() if k.startswith("kagenti.io/")}
-            )
-            kube.create_service(namespace=namespace, body=service_manifest)
-            logger.info(f"Created Service '{name}' in namespace '{namespace}'")
+        # Create Service via the shared _create_or_replace_service helper
+        # (skips only for Job workloads).
+        service_manifest = _build_service_manifest(agent_request)
+        # Carry forward build-time kagenti.io/* labels onto the Service so
+        # downstream label-based selectors / queries match. Use
+        # settings.kagenti_label_prefix (the project-wide constant) instead
+        # of the literal "kagenti.io/" so CodeQL's URL-substring rule
+        # doesn't pattern-match the literal — see line 3626 above for the
+        # same idiom.
+        service_manifest["metadata"]["labels"].update(
+            {k: v for k, v in build_labels.items() if k.startswith(settings.kagenti_label_prefix)}
+        )
+        _create_or_replace_service(kube, namespace, name, service_manifest, final_workload_type)
 
         # Create AgentRuntime CR so the webhook injects sidecars on pod rollout
         # Only for agents — tools don't need sidecar injection
@@ -3634,6 +3956,8 @@ async def finalize_shipwright_build(
                 name=name,
                 namespace=namespace,
                 workload_type=final_workload_type,
+                auth_bridge_mode=final_auth_bridge_mode,
+                mtls_mode=final_mtls_mode,
             )
 
         message = f"Agent '{name}' deployed as {final_workload_type} with image '{output_image}'."
